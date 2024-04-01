@@ -1,4 +1,5 @@
 use std::{
+    fmt::Display,
     sync::mpsc::{self, Sender},
     thread,
 };
@@ -47,49 +48,86 @@ impl Controller {
 pub trait MySample: Send + hound::Sample + Sample + 'static {}
 impl<S> MySample for S where S: Send + hound::Sample + Sample + 'static {}
 
-pub struct Recording<S>
+pub struct Recording<S, RS, RE = anyhow::Error>
 where
     S: MySample,
+    RS: Send,
+    RE: Send,
 {
-    handle: thread::JoinHandle<Result<(), String>>,
+    handle: thread::JoinHandle<Result<(), RE>>,
     controller: Controller,
     phantom: std::marker::PhantomData<S>,
+    receiving_handle: thread::JoinHandle<RS>,
 }
 
-impl<S> Recording<S>
+#[derive(Debug, thiserror::Error)]
+pub enum RecordingError<E>
+where
+    E: Display + Send + Sync + 'static,
+{
+    #[error("failed to join recording thread")]
+    Sync,
+    #[error("{0}")]
+    Other(E),
+}
+
+impl<S, RS, RE> Recording<S, RS, RE>
 where
     S: MySample,
+    RS: Send,
+    RE: Send + Sync + Display,
 {
     pub fn start(&self) {
         self.controller.start();
         println!("Recording started");
     }
 
-    pub fn stop(self) -> Result<(), String> {
+    pub fn stop(self) -> Result<RS, RecordingError<RE>> {
         self.controller.stop();
         println!("Recording stopped");
-        self.handle.join().unwrap()
+        let _ = Self::join_handle(self.handle)?;
+
+        Self::join_handle(self.receiving_handle)
+    }
+
+    fn join_handle<T, E>(handle: thread::JoinHandle<T>) -> Result<T, RecordingError<E>>
+    where
+        E: Display + Send + Sync + 'static,
+    {
+        match handle.join() {
+            Ok(inner) => Ok(inner),
+            Err(e) => {
+                let inner: Box<E> = e.downcast::<E>().map_err(|_| RecordingError::Sync)?;
+                Err(RecordingError::Other(*inner))
+            }
+        }
     }
 }
 
-pub fn controlled_recording<S>(device: &cpal::Device, snd: Sender<S>) -> Recording<S>
+pub fn controlled_recording<S, RS>(
+    device: &cpal::Device,
+    node: crate::sync::ProcessNode<S, RS>,
+) -> Recording<S, RS>
 where
     S: MySample,
+    RS: Send + 'static,
 {
     let controller = Controller::new();
 
     let c2 = controller.clone();
     let device_name = device.name().unwrap().to_string();
 
+    let (sink_send, sink_handle) = node.run();
+
     let handle = thread::spawn(move || {
-        record_from_input_device::<S>(&cpal::default_host(), device_name, snd, c2)
-            .map_err(|e| e.to_string())
+        record_from_input_device::<S>(&cpal::default_host(), device_name, sink_send, c2)
     });
 
     Recording {
         handle,
         controller,
         phantom: std::marker::PhantomData,
+        receiving_handle: sink_handle,
     }
 }
 
@@ -114,7 +152,7 @@ where
         let stream = match config.sample_format() {
             cpal::SampleFormat::F32 => device.build_input_stream(
                 &config.into(),
-                move |data, info| {
+                move |data, _| {
                     write_input_data::<f32, S>(data, chan.clone()).expect("failed to write data")
                 },
                 move |err| eprintln!("an error occurred on stream: {}", err),

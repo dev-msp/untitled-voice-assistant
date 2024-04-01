@@ -8,7 +8,7 @@ use anyhow::anyhow;
 use cpal::traits::{DeviceTrait, HostTrait};
 use whisper_rs::{FullParams, WhisperContext, WhisperError};
 
-use crate::audio::input::controlled_recording;
+use crate::audio::input::{controlled_recording, Recording};
 
 #[derive(Debug, Clone)]
 struct Notifier<T: Clone>(Arc<(Mutex<T>, Condvar)>);
@@ -54,21 +54,16 @@ fn main() -> Result<(), anyhow::Error> {
 
     let p = sync::ProcessNode::new(|it| it.collect::<Vec<_>>());
 
-    let handle = {
-        let (snd, handle) = p.run();
-        let rec = controlled_recording::<f32>(&device, snd.clone());
+    let audio = {
+        let rec: Recording<_, Vec<_>> = controlled_recording(&device, p);
 
         let mut input = String::new();
         std::io::stdin().read_line(&mut input).unwrap();
         rec.start();
 
         std::io::stdin().read_line(&mut input).unwrap();
-        rec.stop().expect("failed to complete recording");
-
-        handle
+        rec.stop()?
     };
-
-    let audio = handle.join().unwrap();
 
     println!("{:?}", audio.len());
     let segments = transcribe_audio(audio)?;
