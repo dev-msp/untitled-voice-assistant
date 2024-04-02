@@ -33,6 +33,15 @@ impl Whisper {
         let mut params = FullParams::new(whisper_rs::SamplingStrategy::Greedy { best_of: 1 });
         params.set_max_len(1);
         params.set_split_on_word(true);
+        params.set_audio_ctx({
+            let blen = data.as_ref().len();
+            let audio_secs = blen as f32 / 16.0;
+            if audio_secs > 30.0 {
+                1500
+            } else {
+                (audio_secs as i32) / 30 * 1500 + 128
+            }
+        });
 
         match state.full(params, data.as_ref()) {
             Ok(0) => {}
