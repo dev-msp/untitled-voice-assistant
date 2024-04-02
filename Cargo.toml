@@ -13,4 +13,4 @@ itertools = "0.12.1"
 linfa = "0.7.0"
 thiserror = "1.0.58"
 webrtc-vad = "0.4.0"
-whisper-rs = { version = "0.10.0", features = ["coreml"] }
+whisper-rs = { git = "https://github.com/tazz4843/whisper-rs", branch = "master", features = [ "coreml", "whisper-cpp-log" ] }

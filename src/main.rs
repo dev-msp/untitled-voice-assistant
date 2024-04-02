@@ -7,6 +7,7 @@ use anyhow::anyhow;
 
 use cpal::traits::{DeviceTrait, HostTrait};
 use whisper_rs::{FullParams, WhisperContext, WhisperError};
+use whisper_rs::install_whisper_log_trampoline;
 
 use crate::audio::input::{controlled_recording, Recording};
 
@@ -49,6 +50,7 @@ fn device_matching_name() -> Result<cpal::Device, anyhow::Error> {
 
 fn main() -> Result<(), anyhow::Error> {
     let device = device_matching_name()?;
+    install_whisper_log_trampoline();
 
     println!("{:?}", device.name()?);
 
