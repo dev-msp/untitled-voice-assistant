@@ -2,7 +2,6 @@ mod audio;
 mod sync;
 mod whisper;
 
-
 use anyhow::anyhow;
 
 use cpal::traits::{DeviceTrait, HostTrait};
@@ -14,13 +13,12 @@ use crate::{
     whisper::{Segment, Whisper},
 };
 
-
-fn device_matching_name() -> Result<cpal::Device, anyhow::Error> {
+fn device_matching_name(name: &str) -> Result<cpal::Device, anyhow::Error> {
     let host = cpal::default_host();
 
     let device = host
         .input_devices()?
-        .find(|x| x.name().map(|x| x.contains("Buds")).unwrap_or(false))
+        .find(|d| d.name().map(|n| n.contains(name)).unwrap_or(false))
         .ok_or(anyhow!("no input device available"))?;
 
     Ok(device)
@@ -29,7 +27,7 @@ fn device_matching_name() -> Result<cpal::Device, anyhow::Error> {
 fn main() -> Result<(), anyhow::Error> {
     install_whisper_log_trampoline();
 
-    let device = device_matching_name()?;
+    let device = device_matching_name("Buds")?;
     println!("{:?}", device.name()?);
 
     let p = sync::ProcessNode::new(|it| it.collect::<Vec<_>>());
