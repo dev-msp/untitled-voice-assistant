@@ -10,7 +10,31 @@ use cpal::{
     Sample, SampleFormat,
 };
 
-use crate::Notifier;
+#[derive(Debug, Clone)]
+struct Notifier<T: Clone>(Arc<(Mutex<T>, Condvar)>);
+
+impl<T: Clone + PartialEq> Notifier<T> {
+    fn notify(&self, value: T) {
+        let (lock, cvar) = &*self.0;
+        let mut state = lock.lock().unwrap();
+        *state = value;
+        cvar.notify_one();
+    }
+
+    fn wait_until(&self, value: T) {
+        let (lock, cvar) = &*self.0;
+        let mut state = lock.lock().unwrap();
+        while *state != value {
+            state = cvar.wait(state).unwrap();
+        }
+    }
+}
+
+impl<T: Clone + Default> Notifier<T> {
+    fn new() -> Self {
+        Self(Arc::new((Mutex::new(T::default()), Condvar::new())))
+    }
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum RecordState {
