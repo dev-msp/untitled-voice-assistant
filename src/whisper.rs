@@ -1,12 +1,11 @@
-use itertools::Itertools;
-use whisper_rs::{FullParams, WhisperContext, WhisperError};
+use std::{
+    sync::mpsc::{Receiver, SendError},
+    thread::JoinHandle,
+};
 
-#[derive(Debug)]
-pub struct Segment {
-    start: usize,
-    end: usize,
-    text: String,
-}
+use itertools::Itertools;
+use sttx::Timing;
+use whisper_rs::{convert_integer_to_float_audio, FullParams, WhisperContext, WhisperError};
 
 pub struct Whisper {
     context: WhisperContext,
@@ -24,24 +23,26 @@ impl Whisper {
         self.context.create_state()
     }
 
-    pub fn transcribe_audio<T>(&self, data: T) -> Result<Vec<Segment>, WhisperError>
+    pub fn transcribe_audio<T>(&self, data: T) -> Result<Vec<sttx::Timing>, WhisperError>
     where
         T: AsRef<[f32]>,
     {
         let mut state = self.create_state()?;
 
-        let mut params = FullParams::new(whisper_rs::SamplingStrategy::Greedy { best_of: 1 });
+        let mut params = FullParams::new(whisper_rs::SamplingStrategy::Greedy { best_of: 2 });
+        // params.set_audio_ctx({
+        //     let blen = data.as_ref().len();
+        //     let audio_secs = blen as f32 / 16000.0;
+        //     eprintln!("audio_secs: {}", audio_secs);
+        //     if audio_secs > 30.0 {
+        //         1500
+        //     } else {
+        //         ((audio_secs / 30.0 * 1500.0) as i32).max(128)
+        //     }
+        // });
+        params.set_token_timestamps(true);
         params.set_max_len(1);
         params.set_split_on_word(true);
-        params.set_audio_ctx({
-            let blen = data.as_ref().len();
-            let audio_secs = blen as f32 / 16.0;
-            if audio_secs > 30.0 {
-                1500
-            } else {
-                (audio_secs as i32) / 30 * 1500 + 128
-            }
-        });
 
         match state.full(params, data.as_ref()) {
             Ok(0) => {}
@@ -53,34 +54,29 @@ impl Whisper {
 
         (0..segments)
             .map(|n| {
-                let start = state.full_get_segment_t0(n)?;
-                let end = state.full_get_segment_t1(n)?;
+                // let start = state.full_get_segment_t0(n)?;
+                // let end = state.full_get_segment_t1(n)?;
 
-                let token_segs: Vec<Segment> = {
+                let token_segs: Vec<Timing> = {
                     let mut out = Vec::new();
                     let n_tokens = state.full_n_tokens(n)? as i64;
-                    // TODO fix this by filtering out meta first and collecting, then we have the
-                    // actual n_tokens value to do math with.
-                    let non_meta_tokens = (0..n_tokens)
-                        .filter(|i| {
-                            let text = state.full_get_token_text(n, *i as i32).unwrap();
-                            !text.starts_with("[_")
-                        })
-                        .enumerate()
-                        .collect_vec();
-                    let n_non_meta_tokens = non_meta_tokens.len() as i64;
 
-                    for (i, original_i) in non_meta_tokens {
-                        let i = i as i64;
-                        let text = state.full_get_token_text(n, original_i as i32)?;
+                    for i in 0..n_tokens {
+                        let text = state.full_get_token_text(n, i as i32)?;
+                        if text.starts_with("[_") {
+                            continue;
+                        }
+
+                        let data = state.full_get_token_data(n, i as i32)?;
+
                         // we're evenly spacing t0 and t1 for each token in the segment
-                        let t0 = start + (end - start) * i / n_non_meta_tokens;
-                        let t1 = start + (end - start) * (i + 1) / n_non_meta_tokens;
-                        out.push(Segment {
-                            start: t0.try_into().unwrap(),
-                            end: t1.try_into().unwrap(),
+                        let t0 = 10 * data.t0;
+                        let t1 = 10 * data.t1;
+                        out.push(Timing::new(
+                            t0.try_into().unwrap(),
+                            t1.try_into().unwrap(),
                             text,
-                        });
+                        ));
                     }
                     out
                 };
@@ -90,4 +86,43 @@ impl Whisper {
             .flatten_ok()
             .collect()
     }
+}
+
+type TranscribeResult = Result<Vec<sttx::Timing>, TranscriptionError>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum TranscriptionError {
+    #[error("Failed to send transcription result")]
+    Sync(#[from] Box<SendError<TranscribeResult>>),
+
+    #[error("Whisper error: {0}")]
+    Whisper(#[from] WhisperError),
+}
+
+type WorkerHandle = (
+    Receiver<TranscribeResult>,
+    JoinHandle<Result<(), TranscriptionError>>,
+);
+
+pub fn transcription_worker(
+    model: &str,
+    jobs: Receiver<Vec<i16>>,
+) -> Result<WorkerHandle, anyhow::Error> {
+    let (snd, recv) = std::sync::mpsc::channel();
+    let whisper = Whisper::new(model)?;
+
+    Ok((
+        recv,
+        std::thread::spawn(move || {
+            for audio in jobs.iter() {
+                let mut audio_fl = vec![0_f32; audio.len()];
+                convert_integer_to_float_audio(&audio, &mut audio_fl)?;
+                let results = whisper
+                    .transcribe_audio(audio_fl)
+                    .map_err(TranscriptionError::from);
+                snd.send(results).map_err(Box::new)?;
+            }
+            Ok(())
+        }),
+    ))
 }

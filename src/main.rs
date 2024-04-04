@@ -1,17 +1,35 @@
+mod app;
 mod audio;
+mod socket;
 mod sync;
 mod whisper;
 
 use anyhow::anyhow;
 
+use clap::Parser;
 use cpal::traits::{DeviceTrait, HostTrait};
 use whisper_rs::install_whisper_log_trampoline;
 
-use crate::{
-    audio::input::{controlled_recording, Recording},
-    sync::ProcessNode,
-    whisper::{Segment, Whisper},
-};
+use crate::{app::run_loop, socket::receive_instructions};
+
+#[derive(clap::Parser)]
+struct App {
+    /// Length of recording in seconds
+    #[clap(short, long)]
+    duration_in_secs: Option<usize>,
+
+    /// Path to the model file
+    #[clap(short, long)]
+    model: String,
+
+    /// Pattern to match against device name
+    #[clap(long)]
+    device_name: Option<String>,
+
+    /// Socket path
+    #[clap(long)]
+    socket_path: String,
+}
 
 fn device_matching_name(name: &str) -> Result<cpal::Device, anyhow::Error> {
     let host = cpal::default_host();
@@ -26,42 +44,27 @@ fn device_matching_name(name: &str) -> Result<cpal::Device, anyhow::Error> {
 
 fn main() -> Result<(), anyhow::Error> {
     install_whisper_log_trampoline();
+    let app = App::parse();
 
-    let device = device_matching_name("Buds")?;
-    println!("{:?}", device.name()?);
+    let device = match &app.device_name {
+        Some(n) => device_matching_name(n)?,
+        None => cpal::default_host()
+            .default_input_device()
+            .ok_or(anyhow!("no input device available"))?,
+    };
 
-    let p = sync::ProcessNode::new(|it| it.collect::<Vec<_>>());
+    eprintln!("{:?}", device.name()?);
 
-    let wh: ProcessNode<Vec<f32>, Result<Vec<Segment>, anyhow::Error>> =
-        sync::ProcessNode::new(|mut it| {
-            let whisper =
-                Whisper::new("/Users/matt/installations/whisper.cpp/models/ggml-base.en.bin")?;
+    let (cmd_recv, cmds) = receive_instructions(&app.socket_path)?;
 
-            let segments = it
-                .next()
-                .ok_or(anyhow!("no audio"))
-                .and_then(|audio| Ok(whisper.transcribe_audio(audio)?))?;
+    let model = app.model.clone();
+    let (recsnd, recrecv) = std::sync::mpsc::channel();
+    let (wh_recv, hnd) = whisper::transcription_worker(&model, recrecv)?;
 
-            Ok(segments)
-        });
+    run_loop(&app, &device, cmd_recv, recsnd, wh_recv)?;
 
-    let (snd, hnd) = wh.run();
-
-    {
-        let rec: Recording<_, Vec<_>> = controlled_recording(&device, p);
-
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input).unwrap();
-        rec.start();
-
-        std::io::stdin().read_line(&mut input).unwrap();
-        let audio = rec.stop()?;
-        snd.send(audio)?;
-    }
-
-    let result = hnd.join().unwrap()?;
-
-    println!("{:?}", result);
+    hnd.join().unwrap()?;
+    cmds.join().unwrap();
 
     Ok(())
 }

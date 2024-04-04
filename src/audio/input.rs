@@ -1,13 +1,16 @@
 use std::{
     fmt::Display,
-    sync::mpsc::{self, Sender},
+    sync::{
+        mpsc::{self, Sender},
+        Arc, Condvar, Mutex,
+    },
     thread,
 };
 
 use anyhow::anyhow;
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
-    Sample, SampleFormat,
+    Sample,
 };
 
 #[derive(Debug, Clone)]
@@ -38,10 +41,10 @@ impl<T: Clone + Default> Notifier<T> {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum RecordState {
-    Recording,
-
     #[default]
     Stopped,
+    Started,
+    Recording,
 }
 
 #[derive(Debug, Clone)]
@@ -57,6 +60,10 @@ impl Controller {
     }
 
     pub fn start(&self) {
+        self.notifier.notify(RecordState::Started);
+    }
+
+    pub fn recording(&self) {
         self.notifier.notify(RecordState::Recording);
     }
 
@@ -103,12 +110,12 @@ where
 {
     pub fn start(&self) {
         self.controller.start();
-        println!("Recording started");
+        self.controller.wait_for(RecordState::Recording);
+        eprintln!("Recording started");
     }
 
     pub fn stop(self) -> Result<RS, RecordingError<RE>> {
         self.controller.stop();
-        println!("Recording stopped");
         let _ = Self::join_handle(self.handle)?;
 
         Self::join_handle(self.receiving_handle)
@@ -144,7 +151,12 @@ where
     let (sink_send, sink_handle) = node.run();
 
     let handle = thread::spawn(move || {
-        record_from_input_device::<S>(&cpal::default_host(), device_name, sink_send, c2)
+        record_from_input_device::<S>(&cpal::default_host(), device_name, sink_send, c2).map_err(
+            |e| {
+                eprintln!("Error attempting to record from input device: {}", e);
+                e
+            },
+        )
     });
 
     Recording {
@@ -168,9 +180,17 @@ where
         .input_devices()?
         .find(|x| x.name().map(|x| x.contains(&device_name)).unwrap_or(false))
         .ok_or(anyhow!("no input device available"))?;
-    let config = device.default_input_config()?;
 
-    controller.wait_for(RecordState::Recording);
+    let config = device
+        .supported_input_configs()?
+        .find_map(|c| {
+            let is_mono = c.channels() == 1;
+            let supports_16k = c.max_sample_rate().0 >= 16000 && c.min_sample_rate().0 <= 16000;
+            (is_mono && supports_16k).then(|| c.with_sample_rate(cpal::SampleRate(16000)))
+        })
+        .ok_or(anyhow!("no supported input configuration"))?;
+
+    controller.wait_for(RecordState::Started);
 
     {
         let stream = match config.sample_format() {
@@ -184,23 +204,11 @@ where
             _ => panic!("unsupported sample format"),
         };
         stream.play()?;
+        controller.recording();
 
         controller.wait_for(RecordState::Stopped);
     }
     Ok(())
-}
-
-pub fn wav_spec_from_config(config: &cpal::SupportedStreamConfig) -> hound::WavSpec {
-    hound::WavSpec {
-        channels: config.channels() as _,
-        sample_rate: config.sample_rate().0,
-        bits_per_sample: (config.sample_format().sample_size() * 8) as _,
-        sample_format: if config.sample_format() == SampleFormat::F32 {
-            hound::SampleFormat::Float
-        } else {
-            hound::SampleFormat::Int
-        },
-    }
 }
 
 fn write_input_data<T, U>(input: &[T], chan: Sender<U>) -> Result<(), mpsc::SendError<U>>
