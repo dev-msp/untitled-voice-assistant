@@ -3,6 +3,8 @@ use std::str::FromStr;
 use crossbeam::channel::Receiver;
 use regex::Regex;
 
+use super::state::Mode;
+
 #[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum Command {
@@ -13,7 +15,7 @@ pub enum Command {
     Stop, // need timestamp?
 
     #[serde(rename = "mode")]
-    Mode(String),
+    Mode(Mode),
 }
 
 impl FromStr for Command {
@@ -29,7 +31,7 @@ impl FromStr for Command {
                     .captures(s)
                     .and_then(|c| c.get(1))
                     .ok_or_else(|| anyhow::anyhow!("Invalid mode").context(s.to_string()))?;
-                Self::Mode(mode.as_str().to_string())
+                Self::Mode(serde_json::from_str(&format!("\"{}\"", mode.as_str()))?)
             }
         };
         Ok(value)

@@ -10,7 +10,7 @@ use clap::Parser;
 use cpal::traits::{DeviceTrait, HostTrait};
 use whisper_rs::install_whisper_log_trampoline;
 
-use crate::app::run_loop;
+use crate::app::Daemon;
 
 #[derive(Debug, clap::Parser)]
 struct App {
@@ -55,14 +55,8 @@ fn main() -> Result<(), anyhow::Error> {
 
     log::info!("Found device: {:?}", device.name()?);
 
-    // So I want to be using threads properly here. A receiver can only be used in the thread in
-    // which it's created, so that should guide me especially. That means anything I want the main
-    // thread to get is sending a sender. The main thread holds on to the receiver.
-
-    run_loop(&app, &device)?;
-
-    // remove socket
-    std::fs::remove_file(&app.socket_path)?;
+    let daemon = Daemon::new(app, Some(device));
+    daemon.run_loop()?;
 
     Ok(())
 }
