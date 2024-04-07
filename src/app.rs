@@ -86,6 +86,7 @@ pub fn run_loop(app: &App, input_device: &Device) -> Result<(), anyhow::Error> {
     });
 
     let mut exit_code = 0_u8;
+
     while last != Some(Command::Quit) {
         let p = sync::ProcessNode::new(|it| it.collect::<Vec<_>>());
         let rec: Recording<_, Vec<i16>> = controlled_recording(input_device, p);
@@ -115,6 +116,10 @@ pub fn run_loop(app: &App, input_device: &Device) -> Result<(), anyhow::Error> {
             Ok(t) => t,
             Err(e) => {
                 log::error!("{e}");
+                last = commands.next();
+                if last == Some(Command::Start) {
+                    res_snd.send(Response::Ack.to_string())?;
+                }
                 continue;
             }
         };
