@@ -1,3 +1,4 @@
+mod agent;
 mod app;
 mod audio;
 mod socket;
@@ -10,7 +11,7 @@ use clap::Parser;
 use cpal::traits::{DeviceTrait, HostTrait};
 use whisper_rs::install_whisper_log_trampoline;
 
-use crate::{app::run_loop, socket::receive_instructions};
+use crate::app::run_loop;
 
 #[derive(clap::Parser)]
 struct App {
@@ -55,16 +56,14 @@ fn main() -> Result<(), anyhow::Error> {
 
     eprintln!("{:?}", device.name()?);
 
-    let (cmd_recv, cmds) = receive_instructions(&app.socket_path)?;
+    // So I want to be using threads properly here. A receiver can only be used in the thread in
+    // which it's created, so that should guide me especially. That means anything I want the main
+    // thread to get is sending a sender. The main thread holds on to the receiver.
 
-    let model = app.model.clone();
-    let (recsnd, recrecv) = std::sync::mpsc::channel();
-    let (wh_recv, hnd) = whisper::transcription_worker(&model, recrecv)?;
+    run_loop(&app, &device)?;
 
-    run_loop(&app, &device, cmd_recv, recsnd, wh_recv)?;
-
-    hnd.join().unwrap()?;
-    cmds.join().unwrap();
+    // remove socket
+    std::fs::remove_file(&app.socket_path)?;
 
     Ok(())
 }
