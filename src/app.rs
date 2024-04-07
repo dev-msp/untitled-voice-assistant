@@ -1,7 +1,7 @@
 use std::{io::Write, str::FromStr};
 
 use cpal::Device;
-use crossbeam::channel::unbounded;
+use crossbeam::channel::{unbounded, Receiver};
 use regex::Regex;
 use sttx::{IteratorExt, Timing};
 
@@ -20,9 +20,6 @@ pub enum Command {
     #[serde(rename = "stop")]
     Stop, // need timestamp?
 
-    #[serde(rename = "quit")]
-    Quit,
-
     #[serde(rename = "mode")]
     Mode(String),
 }
@@ -34,7 +31,6 @@ impl FromStr for Command {
         let value = match s {
             "start" => Self::Start,
             "stop" => Self::Stop,
-            "quit" => Self::Quit,
             s => {
                 let re = Regex::new(r"^mode ([a-z_]+)$")?;
                 let mode = re
@@ -78,48 +74,63 @@ impl std::fmt::Display for Response {
     }
 }
 
+struct CmdStream(Receiver<serde_json::Value>);
+
+impl CmdStream {
+    fn new(recv: Receiver<serde_json::Value>) -> Self {
+        Self(recv)
+    }
+
+    fn iter(&mut self) -> impl Iterator<Item = Command> + '_ {
+        self.0.iter().flat_map(|s| {
+            log::debug!("Received: {}", s);
+            let out: Option<Command> = match serde_json::from_value(s) {
+                Ok(c) => Some(c),
+                Err(e) => {
+                    log::error!("{e}");
+                    None
+                }
+            };
+            log::debug!("Parsed: {:?}", out);
+            out
+        })
+    }
+
+    fn wait_for<F>(&mut self, f: F) -> Result<Command, anyhow::Error>
+    where
+        F: Fn(&Command) -> bool,
+    {
+        self.iter()
+            .find(|c| f(c))
+            .ok_or_else(|| anyhow::anyhow!("exhausted command receiver"))
+    }
+}
+
 pub fn run_loop(app: &App, input_device: &Device) -> Result<(), anyhow::Error> {
     let mut stdout = std::io::stdout();
-    let mut last: Option<Command> = None;
 
     let model = app.model.clone();
     let (whisper_input, recrecv) = unbounded();
     let (whisper_output, hnd) = whisper::transcription_worker(&model, recrecv)?;
 
     let (cmd_recv, res_snd, cmds) = receive_instructions(&app.socket_path)?;
-    let mut commands = cmd_recv.iter().flat_map(|s| {
-        log::debug!("Received: {}", s);
-        let out = match serde_json::from_value(s) {
-            Ok(c) => Some(c),
-            Err(e) => {
-                log::error!("{e}");
-                None
-            }
-        };
-        log::debug!("Parsed: {:?}", out);
-        out
-    });
+    let mut commands = CmdStream::new(cmd_recv);
 
+    #[allow(unused_assignments)]
     let mut exit_code = 0_u8;
 
-    while last != Some(Command::Quit) {
+    loop {
         let p = sync::ProcessNode::new(|it| it.collect::<Vec<_>>());
         let rec: Recording<_, Vec<i16>> = controlled_recording(input_device, p);
 
-        if last != Some(Command::Start) {
-            commands.find(|x| x == &Command::Start);
-            // convert response into serde_json::Value
-            res_snd
-                .send(serde_json::to_value(Response::Ack).expect("Failed to serialize response"))?;
-            log::debug!("Successfully sent ACK");
-        }
+        commands.wait_for(|x| x == &Command::Start)?;
+        res_snd.send(serde_json::to_value(Response::Ack).expect("Failed to serialize response"))?;
+        log::debug!("Successfully sent ACK");
 
         rec.start();
         log::debug!("made it out of rec.start()");
 
-        commands
-            .find(|x| x == &Command::Stop)
-            .ok_or(anyhow::anyhow!("exhausted command receiver"))?;
+        commands.wait_for(|x| x == &Command::Stop)?;
 
         let audio = rec.stop()?;
         let now = std::time::Instant::now();
@@ -133,12 +144,6 @@ pub fn run_loop(app: &App, input_device: &Device) -> Result<(), anyhow::Error> {
             Ok(t) => t,
             Err(e) => {
                 log::error!("{e}");
-                last = commands.next();
-                if last == Some(Command::Start) {
-                    res_snd.send(
-                        serde_json::to_value(Response::Ack).expect("Failed to serialize response"),
-                    )?;
-                }
                 continue;
             }
         };
@@ -162,12 +167,6 @@ pub fn run_loop(app: &App, input_device: &Device) -> Result<(), anyhow::Error> {
             ))
             .expect("Failed to serialize response"),
         )?;
-
-        last = commands.next();
-        if last == Some(Command::Start) {
-            res_snd
-                .send(serde_json::to_value(Response::Ack).expect("Failed to serialize response"))?;
-        }
     }
     res_snd.send(
         serde_json::to_value(Response::Exit(exit_code)).expect("Failed to serialize response"),
