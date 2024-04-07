@@ -11,11 +11,19 @@ use crate::{
     sync, whisper, App,
 };
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize)]
+#[serde(tag = "type", content = "data")]
 pub enum Command {
+    #[serde(rename = "start")]
     Start,
+
+    #[serde(rename = "stop")]
     Stop, // need timestamp?
+
+    #[serde(rename = "quit")]
     Quit,
+
+    #[serde(rename = "mode")]
     Mode(String),
 }
 
@@ -40,9 +48,16 @@ impl FromStr for Command {
     }
 }
 
+#[derive(Debug, Clone, Eq, PartialEq, serde::Serialize)]
+#[serde(tag = "type", content = "data")]
 pub enum Response {
+    #[serde(rename = "ack")]
     Ack,
+
+    #[serde(rename = "exit")]
     Exit(u8),
+
+    #[serde(rename = "transcription")]
     Transcription(Option<String>),
 }
 
@@ -74,7 +89,7 @@ pub fn run_loop(app: &App, input_device: &Device) -> Result<(), anyhow::Error> {
     let (cmd_recv, res_snd, cmds) = receive_instructions(&app.socket_path)?;
     let mut commands = cmd_recv.iter().flat_map(|s| {
         log::debug!("Received: {}", s);
-        let out = match s.parse::<Command>() {
+        let out = match serde_json::from_value(s) {
             Ok(c) => Some(c),
             Err(e) => {
                 log::error!("{e}");
@@ -93,7 +108,9 @@ pub fn run_loop(app: &App, input_device: &Device) -> Result<(), anyhow::Error> {
 
         if last != Some(Command::Start) {
             commands.find(|x| x == &Command::Start);
-            res_snd.send(Response::Ack.to_string())?;
+            // convert response into serde_json::Value
+            res_snd
+                .send(serde_json::to_value(Response::Ack).expect("Failed to serialize response"))?;
             log::debug!("Successfully sent ACK");
         }
 
@@ -118,32 +135,43 @@ pub fn run_loop(app: &App, input_device: &Device) -> Result<(), anyhow::Error> {
                 log::error!("{e}");
                 last = commands.next();
                 if last == Some(Command::Start) {
-                    res_snd.send(Response::Ack.to_string())?;
+                    res_snd.send(
+                        serde_json::to_value(Response::Ack).expect("Failed to serialize response"),
+                    )?;
                 }
                 continue;
             }
         };
 
-        if let Some(transcription) = transcription
+        let transcription = transcription
             .into_iter()
             .join_continuations()
             .sentences()
             .filter(|s| !s.content().starts_with('['))
-            .collect::<Option<Timing>>()
-        {
+            .collect::<Option<Timing>>();
+
+        if transcription.is_some() {
             log::info!("Took {:?} to transcribe", now.elapsed(),);
-            res_snd.send(Response::from(transcription).to_string())?;
         } else {
             log::info!("No transcription");
-            res_snd.send(Response::Transcription(None).to_string())?;
         }
+
+        res_snd.send(
+            serde_json::to_value(Response::Transcription(
+                transcription.map(|t| t.content().to_string()),
+            ))
+            .expect("Failed to serialize response"),
+        )?;
 
         last = commands.next();
         if last == Some(Command::Start) {
-            res_snd.send(Response::Ack.to_string())?;
+            res_snd
+                .send(serde_json::to_value(Response::Ack).expect("Failed to serialize response"))?;
         }
     }
-    res_snd.send(Response::Exit(exit_code).to_string())?;
+    res_snd.send(
+        serde_json::to_value(Response::Exit(exit_code)).expect("Failed to serialize response"),
+    )?;
     // Done responding
     drop(res_snd);
 

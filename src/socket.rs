@@ -9,6 +9,7 @@ use std::{
 
 use anyhow::anyhow;
 use crossbeam::channel::{bounded, unbounded, Receiver, Sender};
+use serde_json::Value;
 
 struct DebugBufReader<R: BufRead>(R);
 
@@ -73,7 +74,7 @@ impl State {
 
 fn write_thread(
     mut wstream: UnixStream,
-    r: Receiver<String>,
+    r: Receiver<Value>,
     queue: Sender<StateChange>,
 ) -> thread::JoinHandle<Result<(), anyhow::Error>> {
     thread::spawn(move || {
@@ -101,14 +102,21 @@ fn write_thread(
 
 fn read_thread(
     stream: UnixStream,
-    s: Sender<String>,
+    s: Sender<Value>,
     queue: Sender<StateChange>,
 ) -> thread::JoinHandle<Result<(), anyhow::Error>> {
     thread::spawn(move || {
         let reader = DebugBufReader(BufReader::new(stream));
-        let it = reader.lines().map(|l| {
+        let it = reader.lines().flat_map(|l| {
             log::trace!("Read line: {:?}", l);
-            l.expect("Failed to read line")
+            let l = l.expect("Failed to read line");
+            match serde_json::from_str(&l) {
+                Ok(v) => Some(v),
+                Err(_) => {
+                    log::warn!("Failed to parse line: {:?}", l);
+                    None
+                }
+            }
         });
         for line in it {
             log::trace!("Sending line: {}", line);
@@ -134,13 +142,13 @@ fn read_thread(
 #[tracing::instrument(skip_all)]
 fn handle_stream(
     stream: UnixStream,
-    cmd_send: Sender<String>,
-    res_recv: &Receiver<String>,
+    cmd_send: Sender<Value>,
+    res_recv: &Receiver<Value>,
 ) -> Result<(), anyhow::Error> {
     let wstream = stream.try_clone()?;
     log::debug!("Cloned stream");
 
-    let (s, r): (Sender<String>, Receiver<String>) = unbounded();
+    let (s, r) = unbounded::<Value>();
 
     let (state_s, state_r) = bounded(1);
     let reads = read_thread(stream, cmd_send, state_s.clone());
@@ -206,7 +214,7 @@ type Handle = std::thread::JoinHandle<Result<(), anyhow::Error>>;
 
 pub fn receive_instructions(
     socket_path: &str,
-) -> Result<(Receiver<String>, Sender<String>, Handle), anyhow::Error> {
+) -> Result<(Receiver<Value>, Sender<Value>, Handle), anyhow::Error> {
     match std::fs::metadata(socket_path) {
         Ok(metadata) if metadata.file_type().is_socket() => {
             std::fs::remove_file(socket_path)?;

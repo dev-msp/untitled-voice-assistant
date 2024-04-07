@@ -12,7 +12,7 @@ use whisper_rs::install_whisper_log_trampoline;
 
 use crate::app::run_loop;
 
-#[derive(clap::Parser)]
+#[derive(Debug, clap::Parser)]
 struct App {
     /// Path to the model file
     #[clap(short, long)]
@@ -44,6 +44,7 @@ fn main() -> Result<(), anyhow::Error> {
     env_logger::init();
 
     let app = App::parse();
+    log::info!("Launching with settings: {:?}", app);
 
     let device = match &app.device_name {
         Some(n) => device_matching_name(n)?,
@@ -52,7 +53,7 @@ fn main() -> Result<(), anyhow::Error> {
             .ok_or(anyhow!("no input device available"))?,
     };
 
-    log::debug!("{:?}", device.name()?);
+    log::info!("Found device: {:?}", device.name()?);
 
     // So I want to be using threads properly here. A receiver can only be used in the thread in
     // which it's created, so that should guide me especially. That means anything I want the main

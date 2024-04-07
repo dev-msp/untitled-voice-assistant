@@ -1382,6 +1382,8 @@ dependencies = [
  "linfa",
  "log",
  "regex",
+ "serde",
+ "serde_json",
  "sttx",
  "thiserror",
  "tracing",
