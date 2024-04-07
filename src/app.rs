@@ -4,8 +4,7 @@ use std::{
 };
 
 use cpal::Device;
-use itertools::Itertools;
-use sttx::IteratorExt;
+use sttx::{IteratorExt, Timing};
 
 use crate::{
     audio::input::{controlled_recording, Recording},
@@ -55,19 +54,23 @@ pub fn run_loop(
             }
         };
 
-        writeln!(
-            &mut stdout,
-            "{} ({:?})",
-            transcription
-                .into_iter()
-                .join_continuations()
-                .sentences()
-                .map(|s| s.content().to_string())
-                .filter(|s| !s.starts_with('['))
-                .join("\n"),
-            now.elapsed()
-        )?;
-        stdout.flush()?;
+        if let Some(transcription) = transcription
+            .into_iter()
+            .join_continuations()
+            .sentences()
+            .filter(|s| !s.content().starts_with('['))
+            .collect::<Option<Timing>>()
+        {
+            eprintln!(
+                "Took {:?} to transcribe: {:?}",
+                now.elapsed(),
+                transcription
+            );
+
+            writeln!(&mut stdout, "{}", transcription.content())?;
+            stdout.flush()?;
+        }
+
         last = commands.iter().next();
 
         // Process WAV data
