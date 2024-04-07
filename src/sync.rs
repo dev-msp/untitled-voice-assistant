@@ -1,9 +1,8 @@
-use std::{
-    sync::mpsc,
-    thread::{self, JoinHandle},
-};
+use std::thread::{self, JoinHandle};
 
-type Reduction<T, R> = Box<dyn Fn(mpsc::Iter<T>) -> R + Send>;
+use crossbeam::channel::{self, unbounded, Sender};
+
+type Reduction<T, R> = Box<dyn Fn(channel::Iter<T>) -> R + Send>;
 
 pub struct ProcessNode<T, R>
 where
@@ -20,7 +19,7 @@ where
 {
     pub fn new<F>(callback: F) -> Self
     where
-        F: Fn(mpsc::Iter<T>) -> R + Send + 'static,
+        F: Fn(channel::Iter<T>) -> R + Send + 'static,
     {
         Self {
             callback: Box::new(callback),
@@ -28,10 +27,10 @@ where
         }
     }
 
-    pub fn run(self) -> (mpsc::Sender<T>, JoinHandle<R>) {
+    pub fn run(self) -> (Sender<T>, JoinHandle<R>) {
         let ProcessNode { callback, .. } = self;
 
-        let (send, recv) = mpsc::channel();
+        let (send, recv) = unbounded();
 
         (
             send,

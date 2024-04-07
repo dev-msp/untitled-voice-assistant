@@ -17,3 +17,8 @@ whisper-rs = { git = "https://github.com/tazz4843/whisper-rs", branch = "master"
 sttx = { git = "file:///Users/matt/code/lang/rust/sttx", branch = "main" }
 clap = { version = "4.5.4", features = ["derive"] }
 regex = "1.10.4"
+tracing = { version = "0.1.40", features = ["log"] }
+tracing-subscriber = "0.3.18"
+env_logger = "0.11.3"
+log = "0.4.21"
+crossbeam = "0.8.4"

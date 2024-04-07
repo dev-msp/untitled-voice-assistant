@@ -1,9 +1,7 @@
 use std::{
-    fmt::Display,
-    sync::{
-        mpsc::{self, Sender},
-        Arc, Condvar, Mutex,
-    },
+    fmt::{Debug, Display},
+    ops::Deref,
+    sync::{mpsc, Arc, Condvar, Mutex},
     thread,
 };
 
@@ -12,29 +10,39 @@ use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
     Sample,
 };
+use crossbeam::channel::Sender;
 
 #[derive(Debug, Clone)]
-struct Notifier<T: Clone>(Arc<(Mutex<T>, Condvar)>);
+pub struct Notifier<T: Clone>(Arc<(Mutex<T>, Condvar)>);
 
-impl<T: Clone + PartialEq> Notifier<T> {
-    fn notify(&self, value: T) {
+impl<T: Debug + Clone + PartialEq> Notifier<T> {
+    pub fn notify(&self, value: T) {
         let (lock, cvar) = &*self.0;
+        log::debug!("Trying to lock (notify)");
         let mut state = lock.lock().unwrap();
+        log::debug!("Locked (notify)");
         *state = value;
         cvar.notify_one();
     }
 
-    fn wait_until(&self, value: T) {
+    pub fn wait_until(&self, value: T) {
         let (lock, cvar) = &*self.0;
+        log::debug!("Trying to lock (wait_until)");
         let mut state = lock.lock().unwrap();
+        log::debug!("Locked (wait_until)");
+        log::debug!("Waiting for value: {:?}", value);
         while *state != value {
             state = cvar.wait(state).unwrap();
+            log::debug!("got value: {:?}", state.deref());
+            if *state != value {
+                log::debug!("Got wrong value ({:?}), continuing", state.deref());
+            }
         }
     }
 }
 
 impl<T: Clone + Default> Notifier<T> {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self(Arc::new((Mutex::new(T::default()), Condvar::new())))
     }
 }
@@ -108,10 +116,11 @@ where
     RS: Send,
     RE: Send + Sync + Display,
 {
+    #[tracing::instrument(skip(self))]
     pub fn start(&self) {
         self.controller.start();
         self.controller.wait_for(RecordState::Recording);
-        eprintln!("Recording started");
+        log::debug!("Recording started");
     }
 
     pub fn stop(self) -> Result<RS, RecordingError<RE>> {
@@ -153,7 +162,7 @@ where
     let handle = thread::spawn(move || {
         record_from_input_device::<S>(&cpal::default_host(), device_name, sink_send, c2).map_err(
             |e| {
-                eprintln!("Error attempting to record from input device: {}", e);
+                log::debug!("Error attempting to record from input device: {}", e);
                 e
             },
         )
@@ -167,6 +176,7 @@ where
     }
 }
 
+#[tracing::instrument(skip_all)]
 pub fn record_from_input_device<S>(
     host: &cpal::Host,
     device_name: String,
@@ -199,7 +209,7 @@ where
                 move |data, _| {
                     write_input_data::<f32, S>(data, chan.clone()).expect("failed to write data")
                 },
-                move |err| eprintln!("an error occurred on stream: {}", err),
+                move |err| log::debug!("an error occurred on stream: {}", err),
             )?,
             _ => panic!("unsupported sample format"),
         };

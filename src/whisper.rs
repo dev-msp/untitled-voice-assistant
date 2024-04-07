@@ -1,8 +1,6 @@
-use std::{
-    sync::mpsc::{Receiver, SendError},
-    thread::JoinHandle,
-};
+use std::thread::JoinHandle;
 
+use crossbeam::channel::{unbounded, Receiver, SendError};
 use itertools::Itertools;
 use sttx::Timing;
 use whisper_rs::{convert_integer_to_float_audio, FullParams, WhisperContext, WhisperError};
@@ -33,7 +31,7 @@ impl Whisper {
         // params.set_audio_ctx({
         //     let blen = data.as_ref().len();
         //     let audio_secs = blen as f32 / 16000.0;
-        //     eprintln!("audio_secs: {}", audio_secs);
+        //     log::debug!("audio_secs: {}", audio_secs);
         //     if audio_secs > 30.0 {
         //         1500
         //     } else {
@@ -108,7 +106,7 @@ pub fn transcription_worker(
     model: &str,
     jobs: Receiver<Vec<i16>>,
 ) -> Result<WorkerHandle, anyhow::Error> {
-    let (snd, recv) = std::sync::mpsc::channel();
+    let (snd, recv) = unbounded();
     let whisper = Whisper::new(model)?;
 
     Ok((

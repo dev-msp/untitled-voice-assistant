@@ -1,6 +1,7 @@
 use std::{io::Write, str::FromStr};
 
 use cpal::Device;
+use crossbeam::channel::unbounded;
 use regex::Regex;
 use sttx::{IteratorExt, Timing};
 
@@ -25,6 +26,7 @@ impl FromStr for Command {
         let value = match s {
             "start" => Self::Start,
             "stop" => Self::Stop,
+            "quit" => Self::Quit,
             s => {
                 let re = Regex::new(r"^mode ([a-z_]+)$")?;
                 let mode = re
@@ -41,12 +43,12 @@ impl FromStr for Command {
 pub enum Response {
     Ack,
     Exit(u8),
-    Transcription(String),
+    Transcription(Option<String>),
 }
 
 impl From<Timing> for Response {
     fn from(t: Timing) -> Self {
-        Self::Transcription(t.content().to_string())
+        Self::Transcription(Some(t.content().to_string()))
     }
 }
 
@@ -55,7 +57,8 @@ impl std::fmt::Display for Response {
         match self {
             Self::Ack => write!(f, "ACK"),
             Self::Exit(code) => write!(f, "EXIT {}", code),
-            Self::Transcription(s) => write!(f, "TX {}", s),
+            Self::Transcription(Some(s)) => write!(f, "TX {}", s),
+            Self::Transcription(None) => write!(f, "TX_EMPTY"),
         }
     }
 }
@@ -65,16 +68,21 @@ pub fn run_loop(app: &App, input_device: &Device) -> Result<(), anyhow::Error> {
     let mut last: Option<Command> = None;
 
     let model = app.model.clone();
-    let (whisper_input, recrecv) = std::sync::mpsc::channel();
+    let (whisper_input, recrecv) = unbounded();
     let (whisper_output, hnd) = whisper::transcription_worker(&model, recrecv)?;
 
     let (cmd_recv, res_snd, cmds) = receive_instructions(&app.socket_path)?;
-    let mut commands = cmd_recv.iter().flat_map(|s| match s.parse::<Command>() {
-        Ok(c) => Some(c),
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            None
-        }
+    let mut commands = cmd_recv.iter().flat_map(|s| {
+        log::debug!("Received: {}", s);
+        let out = match s.parse::<Command>() {
+            Ok(c) => Some(c),
+            Err(e) => {
+                log::error!("{e}");
+                None
+            }
+        };
+        log::debug!("Parsed: {:?}", out);
+        out
     });
 
     let mut exit_code = 0_u8;
@@ -85,29 +93,28 @@ pub fn run_loop(app: &App, input_device: &Device) -> Result<(), anyhow::Error> {
         if last != Some(Command::Start) {
             commands.find(|x| x == &Command::Start);
             res_snd.send(Response::Ack.to_string())?;
+            log::debug!("Successfully sent ACK");
         }
 
         rec.start();
+        log::debug!("made it out of rec.start()");
 
-        if let Some(dur) = app.duration_in_secs {
-            std::thread::sleep(std::time::Duration::from_secs(dur as u64));
-        } else {
-            commands.find(|x| x == &Command::Stop);
-            res_snd.send(Response::Ack.to_string())?;
-        }
+        commands
+            .find(|x| x == &Command::Stop)
+            .ok_or(anyhow::anyhow!("exhausted command receiver"))?;
 
         let audio = rec.stop()?;
         let now = std::time::Instant::now();
         whisper_input.send(audio)?;
         let Some(transcription) = whisper_output.iter().next() else {
-            eprintln!("No transcription");
+            log::warn!("No transcription");
             exit_code = 1;
             break;
         };
         let transcription = match transcription {
             Ok(t) => t,
             Err(e) => {
-                eprintln!("Error: {}", e);
+                log::error!("{e}");
                 continue;
             }
         };
@@ -119,7 +126,7 @@ pub fn run_loop(app: &App, input_device: &Device) -> Result<(), anyhow::Error> {
             .filter(|s| !s.content().starts_with('['))
             .collect::<Option<Timing>>()
         {
-            eprintln!(
+            log::debug!(
                 "Took {:?} to transcribe: {:?}",
                 now.elapsed(),
                 transcription
@@ -127,11 +134,14 @@ pub fn run_loop(app: &App, input_device: &Device) -> Result<(), anyhow::Error> {
 
             res_snd.send(Response::from(transcription).to_string())?;
         } else {
-            eprintln!("No transcription");
-            res_snd.send(Response::Ack.to_string())?;
+            log::info!("No transcription");
+            res_snd.send(Response::Transcription(None).to_string())?;
         }
 
         last = commands.next();
+        if last == Some(Command::Start) {
+            res_snd.send(Response::Ack.to_string())?;
+        }
     }
     res_snd.send(Response::Exit(exit_code).to_string())?;
     // Done responding

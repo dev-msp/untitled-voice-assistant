@@ -1,4 +1,3 @@
-mod agent;
 mod app;
 mod audio;
 mod socket;
@@ -15,10 +14,6 @@ use crate::app::run_loop;
 
 #[derive(clap::Parser)]
 struct App {
-    /// Length of recording in seconds
-    #[clap(short, long)]
-    duration_in_secs: Option<usize>,
-
     /// Path to the model file
     #[clap(short, long)]
     model: String,
@@ -45,6 +40,9 @@ fn device_matching_name(name: &str) -> Result<cpal::Device, anyhow::Error> {
 
 fn main() -> Result<(), anyhow::Error> {
     install_whisper_log_trampoline();
+
+    env_logger::init();
+
     let app = App::parse();
 
     let device = match &app.device_name {
@@ -54,7 +52,7 @@ fn main() -> Result<(), anyhow::Error> {
             .ok_or(anyhow!("no input device available"))?,
     };
 
-    eprintln!("{:?}", device.name()?);
+    log::debug!("{:?}", device.name()?);
 
     // So I want to be using threads properly here. A receiver can only be used in the thread in
     // which it's created, so that should guide me especially. That means anything I want the main
