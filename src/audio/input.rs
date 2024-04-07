@@ -18,24 +18,24 @@ pub struct Notifier<T: Clone>(Arc<(Mutex<T>, Condvar)>);
 impl<T: Debug + Clone + PartialEq> Notifier<T> {
     pub fn notify(&self, value: T) {
         let (lock, cvar) = &*self.0;
-        log::debug!("Trying to lock (notify)");
+        log::trace!("Trying to lock (notify)");
         let mut state = lock.lock().unwrap();
-        log::debug!("Locked (notify)");
+        log::trace!("Locked (notify)");
         *state = value;
         cvar.notify_one();
     }
 
     pub fn wait_until(&self, value: T) {
         let (lock, cvar) = &*self.0;
-        log::debug!("Trying to lock (wait_until)");
+        log::trace!("Trying to lock (wait_until)");
         let mut state = lock.lock().unwrap();
-        log::debug!("Locked (wait_until)");
-        log::debug!("Waiting for value: {:?}", value);
+        log::trace!("Locked (wait_until)");
+        log::trace!("Waiting for value: {:?}", value);
         while *state != value {
             state = cvar.wait(state).unwrap();
-            log::debug!("got value: {:?}", state.deref());
+            log::trace!("got value: {:?}", state.deref());
             if *state != value {
-                log::debug!("Got wrong value ({:?}), continuing", state.deref());
+                log::trace!("Got wrong value ({:?}), continuing", state.deref());
             }
         }
     }
@@ -120,7 +120,7 @@ where
     pub fn start(&self) {
         self.controller.start();
         self.controller.wait_for(RecordState::Recording);
-        log::debug!("Recording started");
+        log::info!("Recording started");
     }
 
     pub fn stop(self) -> Result<RS, RecordingError<RE>> {
@@ -162,7 +162,7 @@ where
     let handle = thread::spawn(move || {
         record_from_input_device::<S>(&cpal::default_host(), device_name, sink_send, c2).map_err(
             |e| {
-                log::debug!("Error attempting to record from input device: {}", e);
+                log::trace!("Error attempting to record from input device: {}", e);
                 e
             },
         )
@@ -209,7 +209,7 @@ where
                 move |data, _| {
                     write_input_data::<f32, S>(data, chan.clone()).expect("failed to write data")
                 },
-                move |err| log::debug!("an error occurred on stream: {}", err),
+                move |err| log::trace!("an error occurred on stream: {}", err),
             )?,
             _ => panic!("unsupported sample format"),
         };

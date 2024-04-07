@@ -84,7 +84,7 @@ fn write_thread(
             match queue.send(StateChange::MessageWritten) {
                 Ok(_) => {}
                 Err(_) => {
-                    log::warn!("Failed to send message from socket write thread");
+                    log::debug!("Failed to send message from socket write thread");
                 }
             };
         }
@@ -92,7 +92,7 @@ fn write_thread(
         match queue.send(StateChange::Close) {
             Ok(_) => {}
             Err(_) => {
-                log::warn!("Failed to send close from socket write thread");
+                log::debug!("Failed to send close from socket write thread");
             }
         }
         Ok(())
@@ -227,9 +227,8 @@ pub fn receive_instructions(
             let mut incoming = listener.incoming();
             while let Some(rstream) = incoming.next().transpose()? {
                 handle_stream(rstream, csend.clone(), &rrecv)?;
-                log::debug!("Handled stream");
             }
-            log::info!("Listener done providing streams");
+            log::warn!("Listener done providing streams");
             Ok(())
         }),
     ))

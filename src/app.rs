@@ -126,12 +126,7 @@ pub fn run_loop(app: &App, input_device: &Device) -> Result<(), anyhow::Error> {
             .filter(|s| !s.content().starts_with('['))
             .collect::<Option<Timing>>()
         {
-            log::debug!(
-                "Took {:?} to transcribe: {:?}",
-                now.elapsed(),
-                transcription
-            );
-
+            log::info!("Took {:?} to transcribe", now.elapsed(),);
             res_snd.send(Response::from(transcription).to_string())?;
         } else {
             log::info!("No transcription");
