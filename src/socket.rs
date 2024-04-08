@@ -4,11 +4,15 @@ use std::{
         fs::FileTypeExt,
         net::{UnixListener, UnixStream},
     },
+    sync::Arc,
     thread::{self},
 };
 
 use anyhow::anyhow;
-use crossbeam::channel::{bounded, unbounded, Receiver, Sender};
+use crossbeam::{
+    atomic::AtomicCell,
+    channel::{unbounded, Receiver, Sender},
+};
 use serde_json::Value;
 
 struct DebugBufReader<R: BufRead>(R);
@@ -32,70 +36,23 @@ impl<R: BufRead> BufRead for DebugBufReader<R> {
     }
 }
 
-#[derive(Debug)]
-struct State {
-    half_closed: bool,
-    outstanding_messages: i16,
-}
-
-#[derive(Debug)]
-enum StateChange {
-    Close,
-    MessageRead,
-    MessageWritten,
-}
-
-impl State {
-    fn new() -> Self {
-        Self {
-            half_closed: false,
-            outstanding_messages: 0,
-        }
-    }
-
-    fn change(&mut self, change: StateChange) {
-        match change {
-            StateChange::Close => {
-                self.half_closed = true;
-            }
-            StateChange::MessageRead => {
-                self.outstanding_messages += 1;
-            }
-            StateChange::MessageWritten => {
-                self.outstanding_messages -= 1;
-            }
-        }
-    }
-
-    fn ready(&self) -> bool {
-        self.half_closed && self.outstanding_messages == 0
-    }
-}
-
 fn write_thread(
     mut wstream: UnixStream,
-    r: Receiver<Value>,
-    queue: Sender<StateChange>,
+    r: &Receiver<Value>,
+    is_done: Arc<AtomicCell<bool>>,
 ) -> thread::JoinHandle<Result<(), anyhow::Error>> {
+    let r = r.clone();
     thread::spawn(move || {
-        for line in r.iter() {
-            log::trace!("Writing line: {}", line);
-            wstream.write_all(format!("{line}\n").as_bytes())?;
-            log::trace!("Wrote line");
-            match queue.send(StateChange::MessageWritten) {
-                Ok(_) => {}
-                Err(_) => {
-                    log::debug!("Failed to send message from socket write thread");
-                }
-            };
-        }
-        log::debug!("Exiting write thread");
-        match queue.send(StateChange::Close) {
-            Ok(_) => {}
-            Err(_) => {
-                log::debug!("Failed to send close from socket write thread");
+        while !is_done.load() {
+            if let Ok(line) = r.recv() {
+                log::trace!("Writing line: {}", line);
+                wstream.write_all(format!("{line}\n").as_bytes())?;
+                log::trace!("Wrote line");
+            } else {
+                log::error!("Failed to read line");
             }
         }
+        log::debug!("Exiting write thread");
         Ok(())
     })
 }
@@ -103,7 +60,7 @@ fn write_thread(
 fn read_thread(
     stream: UnixStream,
     s: Sender<Value>,
-    queue: Sender<StateChange>,
+    is_done: Arc<AtomicCell<bool>>,
 ) -> thread::JoinHandle<Result<(), anyhow::Error>> {
     thread::spawn(move || {
         let reader = DebugBufReader(BufReader::new(stream));
@@ -121,20 +78,10 @@ fn read_thread(
         for line in it {
             log::trace!("Sending line: {}", line);
             s.send(line)?;
-            match queue.send(StateChange::MessageRead) {
-                Ok(_) => {}
-                Err(_) => {
-                    log::warn!("Failed to send message from socket read thread");
-                }
-            };
         }
+
+        is_done.store(true);
         log::debug!("Exiting read thread");
-        match queue.send(StateChange::Close) {
-            Ok(_) => {}
-            Err(_) => {
-                log::warn!("Failed to send close from socket read thread");
-            }
-        };
         Ok(())
     })
 }
@@ -148,63 +95,16 @@ fn handle_stream(
     let wstream = stream.try_clone()?;
     log::debug!("Cloned stream");
 
-    let (s, r) = unbounded::<Value>();
+    let is_done = Arc::new(AtomicCell::new(false));
 
-    let (state_s, state_r) = bounded(1);
-    let reads = read_thread(stream, cmd_send, state_s.clone());
-    let writes = write_thread(wstream, r, state_s);
+    let reads = read_thread(stream, cmd_send, is_done.clone());
+    let writes = write_thread(wstream, res_recv, is_done);
 
-    let (ns, nr) = crossbeam::channel::unbounded();
-    let notification = thread::spawn(move || {
-        if state_r
-            .iter()
-            .scan(State::new(), |state, change| {
-                log::trace!("Received state change: {:?}", change);
-                state.change(change);
-                log::trace!("State: {:?}", state);
-                Some(state.ready())
-            })
-            .any(|ready| ready)
-        {
-            Ok(ns.try_send(())?)
-        } else {
-            anyhow::bail!("No ready state");
-        }
-    });
-
-    loop {
-        // let Ok(response) = res_recv.recv() else {
-        //     log::debug!("Failed to receive response");
-        //     break;
-        // };
-        // log::debug!("Received response from channel: {}", response);
-        //
-        // s.send(response).expect("Failed to send response");
-        // log::debug!("Sent response");
-        crossbeam::select! {
-            recv(res_recv) -> msg => {
-                let response = msg?;
-                log::trace!("Received response from channel: {}", response);
-                s.send(response).expect("Failed to send response");
-                log::trace!("Sent response");
-            },
-            recv(nr) -> _ => {
-                log::debug!("Exiting handle_stream");
-                break;
-            }
-        }
-    }
-    // So the writes thread can end
-    drop(s);
-
-    notification
-        .join()
-        .expect("Failed to join notification thread")?;
     let w_outcome = writes.join().expect("Failed to join write thread");
     let r_outcome = reads.join().expect("Failed to join read thread");
 
-    w_outcome?;
-    r_outcome?;
+    w_outcome.unwrap();
+    r_outcome.unwrap();
 
     log::debug!("Exiting handle_stream");
     Ok(())
