@@ -56,7 +56,10 @@ fn main() -> Result<(), anyhow::Error> {
     log::info!("Found device: {:?}", device.name()?);
 
     let mut daemon = Daemon::new(app, Some(device));
-    daemon.run_loop()?;
+    let should_reset = daemon.run_loop()?;
+    if should_reset {
+        std::process::exit(1);
+    }
 
     Ok(())
 }

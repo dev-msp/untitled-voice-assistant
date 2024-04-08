@@ -40,25 +40,52 @@ impl Transcription {
     }
 }
 
+fn filter_words(
+    content: &str,
+    word_re: Option<regex::Regex>,
+) -> impl Iterator<Item = String> + Clone + '_ {
+    content
+        .split_whitespace()
+        .map(|w| w.chars().filter(|c| c.is_alphabetic()).collect::<String>())
+        .filter(move |w| {
+            if let Some(ref re) = word_re {
+                re.is_match(w)
+            } else {
+                true
+            }
+        })
+}
+
 impl TryFrom<&Timing> for Command {
     type Error = ();
 
     fn try_from(t: &Timing) -> Result<Self, Self::Error> {
         let word_re = Regex::new(r"^(set|mode|to|chat|live|clipboard)$").unwrap();
         let content = t.content().to_ascii_lowercase();
-        let mut words = content
-            .split_whitespace()
-            .map(|w| w.chars().filter(|c| c.is_alphabetic()).collect::<String>())
-            .filter(|w| word_re.is_match(w));
+        {
+            let words = filter_words(&content, None);
+            if let Ok(cmd) = handle_reset(words) {
+                return Ok(cmd);
+            };
+        }
+
+        let mut words = filter_words(&content, Some(word_re));
 
         let prefix = words.clone().take(3).join(" ");
         log::info!("Prefix: {}", prefix);
 
-        if prefix != "set mode to" {
-            return Err(());
-        }
+        let mode = if prefix == "set mode to" {
+            words.nth(3)
+        } else {
+            let md = words.next();
+            let wd = words.next();
+            match (md, wd.as_deref()) {
+                (Some(word), Some("mode")) => Some(word),
+                _ => None,
+            }
+        };
 
-        let Some(mode) = words.nth(3) else {
+        let Some(mode) = mode else {
             return Err(());
         };
 
@@ -75,6 +102,18 @@ impl TryFrom<&Timing> for Command {
     }
 }
 
+fn handle_reset<T: Iterator<Item = String>>(mut words: T) -> Result<Command, ()> {
+    log::info!("Handling reset");
+    let temp = words.next();
+    let temp2 = words.next();
+    let x = (temp.as_deref(), temp2.as_deref());
+    log::info!("Reset words: {:?}", x);
+    match x {
+        (Some("reset"), Some("yourself")) => Ok(Command::Reset),
+        _ => Err(()),
+    }
+}
+
 impl Daemon {
     pub fn new(app: App, input_device: Option<Device>) -> Self {
         Self {
@@ -86,7 +125,7 @@ impl Daemon {
 
     /// Runs the main application loop.
     ///
-    pub fn run_loop(&mut self) -> Result<(), anyhow::Error> {
+    pub fn run_loop(&mut self) -> Result<bool, anyhow::Error> {
         let model = self.app.model.clone();
         let device = self
             .input_device
@@ -203,6 +242,13 @@ impl Daemon {
                     resps.send(
                         serde_json::to_value(Response::Ack).expect("Failed to serialize response"),
                     )?;
+                Command::Reset => {
+                    log::info!("Resetting");
+                    return Ok(true);
+                }
+                c @ Command::Mode(_) => {
+                    assert!(!new_state.running());
+                    resps.send(c.as_response().unwrap_or(Response::Ack).as_json())?;
                 }
             }
         }
@@ -217,6 +263,6 @@ impl Daemon {
 
         // remove socket
         std::fs::remove_file(&self.app.socket_path)?;
-        Ok(())
+        Ok(false)
     }
 }

@@ -53,6 +53,12 @@ impl State {
                     false
                 }
             }
+            // Nothing changes about the state when we send a reset command. It's just about
+            // quitting.
+            //
+            // TODO: I should consider making the event loop not sort of dependent on changes in the
+            // state and find some other way to represent that.
+            Command::Reset => true,
         }
     }
 }
