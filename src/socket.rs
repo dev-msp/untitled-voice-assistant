@@ -114,7 +114,7 @@ type Handle = std::thread::JoinHandle<Result<(), anyhow::Error>>;
 
 pub fn receive_instructions(
     socket_path: &str,
-) -> Result<(Receiver<Value>, Sender<Value>, Handle), anyhow::Error> {
+) -> Result<((Receiver<Value>, Sender<Value>), Sender<Value>, Handle), anyhow::Error> {
     match std::fs::metadata(socket_path) {
         Ok(metadata) if metadata.file_type().is_socket() => {
             std::fs::remove_file(socket_path)?;
@@ -127,7 +127,7 @@ pub fn receive_instructions(
     let (rsend, rrecv) = unbounded();
     let sock_path = socket_path.to_string();
     Ok((
-        crecv,
+        (crecv, csend.clone()),
         rsend,
         std::thread::spawn(move || {
             let listener = UnixListener::bind(sock_path).expect("Failed to bind to socket");

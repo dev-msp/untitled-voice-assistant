@@ -55,7 +55,7 @@ fn main() -> Result<(), anyhow::Error> {
 
     log::info!("Found device: {:?}", device.name()?);
 
-    let daemon = Daemon::new(app, Some(device));
+    let mut daemon = Daemon::new(app, Some(device));
     daemon.run_loop()?;
 
     Ok(())

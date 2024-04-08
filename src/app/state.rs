@@ -7,11 +7,12 @@ pub struct State {
 }
 
 impl State {
-    pub fn new() -> Self {
-        Self {
-            running: false,
-            mode: Mode::default(),
-        }
+    pub fn running(&self) -> bool {
+        self.running
+    }
+
+    pub fn mode(&self) -> Mode {
+        self.mode.clone()
     }
 
     fn start(&mut self) -> bool {
@@ -32,7 +33,7 @@ impl State {
         }
     }
 
-    fn change_mode(&mut self, mode: Mode) -> bool {
+    pub fn change_mode(&mut self, mode: Mode) -> bool {
         if self.mode == mode {
             false
         } else {
@@ -41,15 +42,15 @@ impl State {
         }
     }
 
-    pub fn next_state(&mut self, cmd: Command) -> bool {
+    pub fn next_state(&mut self, cmd: &Command) -> bool {
         match cmd {
             Command::Start => self.start(),
             Command::Stop => self.stop(),
             Command::Mode(mode) => {
                 if !self.running {
-                    false
+                    self.change_mode(mode.clone())
                 } else {
-                    self.change_mode(mode)
+                    false
                 }
             }
         }

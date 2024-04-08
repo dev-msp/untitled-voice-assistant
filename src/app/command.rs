@@ -1,11 +1,12 @@
 use std::str::FromStr;
 
 use crossbeam::channel::Receiver;
+use itertools::Itertools;
 use regex::Regex;
 
-use super::state::Mode;
+use super::state::{Mode, State};
 
-#[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum Command {
     #[serde(rename = "start")]
@@ -45,27 +46,26 @@ impl CmdStream {
         Self(recv)
     }
 
-    pub fn iter(&mut self) -> impl Iterator<Item = Command> + '_ {
-        self.0.iter().flat_map(|s| {
-            log::debug!("Received: {}", s);
-            let out: Option<Command> = match serde_json::from_value(s) {
-                Ok(c) => Some(c),
-                Err(e) => {
-                    log::error!("{e}");
-                    None
-                }
-            };
-            log::debug!("Parsed: {:?}", out);
-            out
-        })
+    pub fn iter(&mut self) -> impl Iterator<Item = Result<Command, serde_json::Error>> + '_ {
+        self.0.iter().map(serde_json::from_value)
     }
 
-    pub fn wait_for<F>(&mut self, f: F) -> Result<Command, anyhow::Error>
-    where
-        F: Fn(&Command) -> bool,
-    {
-        self.iter()
-            .find(|c| f(c))
-            .ok_or_else(|| anyhow::anyhow!("exhausted command receiver"))
+    pub fn run_state_machine<'a>(
+        &'a mut self,
+        state: &'a mut super::state::State,
+    ) -> impl Iterator<Item = Result<(Command, Option<State>), serde_json::Error>> + 'a {
+        self.iter().map_ok(move |cmd| {
+            log::debug!("Received command: {:?}", cmd);
+            log::debug!("Current state: {:?}", state);
+            let initial = state.clone();
+            let out = state.next_state(&cmd);
+            if out {
+                log::debug!("State transitioned to {:?}", state);
+                (cmd, Some(state.clone()))
+            } else {
+                log::debug!("No state transition from {:?}", initial);
+                (cmd, None)
+            }
+        })
     }
 }
