@@ -162,7 +162,7 @@ where
     let handle = thread::spawn(move || {
         record_from_input_device::<S>(&cpal::default_host(), device_name, sink_send, c2).map_err(
             |e| {
-                log::trace!("Error attempting to record from input device: {}", e);
+                log::error!("Error attempting to record from input device: {}", e);
                 e
             },
         )
@@ -193,6 +193,15 @@ where
 
     let config = device
         .supported_input_configs()?
+        .map(|c| {
+            log::debug!(
+                "channels: {}, sample rate: {} - {}",
+                c.channels(),
+                c.min_sample_rate().0,
+                c.max_sample_rate().0
+            );
+            c
+        })
         .find_map(|c| {
             let is_mono = c.channels() == 1;
             let supports_16k = c.max_sample_rate().0 >= 16000 && c.min_sample_rate().0 <= 16000;
