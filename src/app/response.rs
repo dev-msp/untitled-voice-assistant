@@ -1,6 +1,6 @@
 use super::state::{Chat, Mode};
 
-#[derive(Debug, Clone, Eq, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum Response {
     #[serde(rename = "ack")]
@@ -14,6 +14,9 @@ pub enum Response {
 
     #[serde(rename = "exit")]
     Exit(u8),
+
+    #[serde(rename = "new_mode")]
+    NewMode(Mode),
 
     #[serde(rename = "transcription")]
     Transcription { content: Option<String>, mode: Mode },
@@ -35,17 +38,25 @@ impl std::fmt::Display for Response {
             Self::Nil => write!(f, "NIL"),
             Self::Error(s) => write!(f, "ERROR {}", s),
             Self::Exit(code) => write!(f, "EXIT {}", code),
+            Self::NewMode(mode) => write!(f, "NEW_MODE {}", mode),
             Self::Transcription {
                 content: Some(s),
                 mode,
             } => match mode {
                 Mode::Standard => write!(f, "TX {}", s),
-                Mode::Clipboard => write!(f, "TX_CLIP {}", s),
+                // TODO: use contents?
+                Mode::Clipboard { .. } => write!(f, "TX_CLIP {}", s),
                 Mode::LiveTyping => write!(f, "TX_LIVE {}", s),
                 Mode::Chat(Chat::StartNew(system)) => write!(f, "TX_CHAT {} {}", system, s),
                 Mode::Chat(Chat::Continue) => write!(f, "TX_CHAT {}", s),
             },
             Self::Transcription { content: None, .. } => write!(f, "TX_EMPTY"),
         }
+    }
+}
+
+impl Response {
+    pub fn as_json(&self) -> serde_json::Value {
+        serde_json::to_value(self).unwrap()
     }
 }

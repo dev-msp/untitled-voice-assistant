@@ -20,12 +20,16 @@ pub enum Command {
 
     #[serde(rename = "mode")]
     Mode(Mode),
+
+    #[serde(rename = "respond")]
+    Respond(Response),
 }
 
 impl Command {
     pub fn as_response(&self) -> Option<Response> {
         match self {
             Self::Mode(mode) => Some(Response::NewMode(mode.clone())),
+            Self::Respond(r) => Some(r.clone()),
             _ => None,
         }
     }

@@ -43,33 +43,67 @@ impl Transcription {
 fn filter_words(
     content: &str,
     word_re: Option<regex::Regex>,
-) -> impl Iterator<Item = String> + Clone + '_ {
+) -> impl Iterator<Item = (usize, String)> + Clone + '_ {
+    let max_char_idx = content.chars().count() - 1;
     content
-        .split_whitespace()
-        .map(|w| w.chars().filter(|c| c.is_alphabetic()).collect::<String>())
-        .filter(move |w| {
-            if let Some(ref re) = word_re {
-                re.is_match(w)
-            } else {
-                true
-            }
+        .chars()
+        // Accumulate words and their offsets in bytes
+        .enumerate()
+        .scan(
+            (0, 0, String::new()),
+            move |(total_offset, word_start_offset, word), (i, c)| {
+                let bs = c.len_utf8();
+
+                if !c.is_whitespace() {
+                    // Mark the start of the word.
+                    if word.is_empty() && total_offset != word_start_offset {
+                        *word_start_offset = *total_offset;
+                    }
+
+                    word.push(c);
+                }
+
+                // Advance the offset.
+                *total_offset += bs;
+
+                // When we reach a word boundary and the word is at least one character long, or we
+                // know this is the last character, then output the word along with its start
+                // offset.
+                if (c.is_whitespace() && !word.is_empty()) || i == max_char_idx {
+                    let w = std::mem::take(word);
+                    Some(Some((*word_start_offset, w)))
+                } else {
+                    Some(None)
+                }
+                // I need to flush what's left at the end somehow.
+            },
+        )
+        .flatten()
+        .map(|(o, w)| {
+            log::debug!("Word: {:?} at offset: {:?}", w, o);
+            (o, w)
         })
+        // Filter out words that don't match the regex
+        .filter(move |(_, w)| word_re.as_ref().map_or(true, |re| re.is_match(w)))
 }
 
 impl TryFrom<&Timing> for Command {
     type Error = ();
 
     fn try_from(t: &Timing) -> Result<Self, Self::Error> {
-        let word_re = Regex::new(r"^(set|mode|to|chat|live|clipboard)$").unwrap();
         let content = t.content().to_ascii_lowercase();
         {
-            let words = filter_words(&content, None);
-            if let Ok(cmd) = handle_reset(words) {
+            if let Some(cmd) = handle_reset(&content) {
                 return Ok(cmd);
             };
+
+            if let Some(cmd) = handle_hey_robot(&content) {
+                return Ok(cmd);
+            }
         }
 
-        let mut words = filter_words(&content, Some(word_re));
+        let word_re = Regex::new(r"^(set|mode|to|chat|live|clipboard)$").unwrap();
+        let mut words = filter_words(&content, Some(word_re)).map(|(_, w)| w);
 
         let prefix = words.clone().take(3).join(" ");
         log::info!("Prefix: {}", prefix);
@@ -96,21 +130,59 @@ impl TryFrom<&Timing> for Command {
                 "You are a terse assistant with minimal affect.".into(),
             )))),
             "live" => Ok(Command::Mode(Mode::LiveTyping)),
-            "clipboard" => Ok(Command::Mode(Mode::Clipboard)),
+            "clipboard" => Ok(Command::Mode(Mode::Clipboard {
+                use_clipboard: content.contains("use the clipboard"),
+                use_llm: false,
+            })),
             _ => Err(()),
         }
     }
 }
 
-fn handle_reset<T: Iterator<Item = String>>(mut words: T) -> Result<Command, ()> {
-    log::info!("Handling reset");
-    let temp = words.next();
-    let temp2 = words.next();
-    let x = (temp.as_deref(), temp2.as_deref());
-    log::info!("Reset words: {:?}", x);
-    match x {
-        (Some("reset"), Some("yourself")) => Ok(Command::Reset),
-        _ => Err(()),
+fn handle_reset(content: &str) -> Option<Command> {
+    let words = filter_words(content, None);
+    let ((_, fst), (_, snd)) = words.tuple_windows().next()?;
+    match (fst.as_str(), snd.as_str()) {
+        ("reset", "yourself") => Some(Command::Reset),
+        _ => None,
+    }
+}
+
+fn handle_hey_robot(content: &str) -> Option<Command> {
+    let words = filter_words(content, None).map(|(i, w)| {
+        (
+            i,
+            w.chars().filter(|c| c.is_alphabetic()).collect::<String>(),
+        )
+    });
+    log::debug!(
+        "Words: {:?}",
+        filter_words(content, None)
+            .map(|(_, w)| w)
+            .collect::<Vec<_>>()
+    );
+    let ((_, fst), (_, snd), (o, _)) = words.tuple_windows().next()?;
+    log::debug!("Fst: {:?}, Snd: {:?}", fst, snd);
+    match (fst.as_str(), snd.as_str()) {
+        ("hey", "robot") => {
+            let use_clipboard = content.contains("use the clipboard");
+            // SAFETY: the offset `o` is known to be within the bounds of the content string.
+            let content = if use_clipboard {
+                content[o..]
+                    .replace("clipboard", "content provided")
+                    .to_string()
+            } else {
+                content[o..].to_string()
+            };
+            Some(Command::Respond(Response::Transcription {
+                content: Some(content),
+                mode: Mode::Clipboard {
+                    use_clipboard,
+                    use_llm: true,
+                },
+            }))
+        }
+        _ => None,
     }
 }
 
@@ -148,17 +220,12 @@ impl Daemon {
                 Ok((c, s)) => (c, s),
                 Err(e) => {
                     log::error!("{e}");
-                    resps.send(
-                        serde_json::to_value(Response::Error(e.to_string()))
-                            .expect("Failed to serialize response"),
-                    )?;
+                    resps.send(Response::Error(e.to_string()).as_json())?;
                     continue;
                 }
             };
             let Some(new_state) = new_state else {
-                resps.send(
-                    serde_json::to_value(Response::Nil).expect("Failed to serialize response"),
-                )?;
+                resps.send(Response::Nil.as_json())?;
                 continue;
             };
 
@@ -176,9 +243,7 @@ impl Daemon {
                     assert!(new_state.running());
 
                     rec.as_mut().unwrap().start();
-                    resps.send(
-                        serde_json::to_value(Response::Ack).expect("Failed to serialize response"),
-                    )?;
+                    resps.send(Response::Ack.as_json())?;
                     log::debug!("Successfully sent ACK");
                 }
 
@@ -206,42 +271,32 @@ impl Daemon {
                             }
 
                             if let Some(cmd) = t.clone().and_then(|t| Command::try_from(&t).ok()) {
-                                scmds.send(
-                                    serde_json::to_value(cmd).expect("Failed to serialize command"),
-                                )?;
-                                resps.send(
-                                    serde_json::to_value(Response::Ack)
-                                        .expect("Failed to serialize response"),
-                                )?;
+                                scmds.send(cmd.as_json())?;
+                                log::info!("Sent command: {}", cmd.as_json().to_string());
+                                resps.send(cmd.as_response().unwrap_or(Response::Ack).as_json())?;
                             } else {
                                 resps.send(
-                                    serde_json::to_value(Response::Transcription {
+                                    Response::Transcription {
                                         content: t.map(|t| t.content().to_string()),
                                         mode: new_state.mode(),
-                                    })
-                                    .expect("Failed to serialize response"),
+                                    }
+                                    .as_json(),
                                 )?;
                             }
                         }
                         Err(e) => {
                             log::error!("{e}");
                             resps.send(
-                                serde_json::to_value(Response::Transcription {
+                                Response::Transcription {
                                     content: None,
                                     mode: new_state.mode(),
-                                })
-                                .expect("Failed to serialize response"),
+                                }
+                                .as_json(),
                             )?;
                             exit_code = 1;
                         }
                     }
                 }
-                Command::Mode(_) => {
-                    assert!(!new_state.running());
-
-                    resps.send(
-                        serde_json::to_value(Response::Ack).expect("Failed to serialize response"),
-                    )?;
                 Command::Reset => {
                     log::info!("Resetting");
                     return Ok(true);
@@ -250,8 +305,14 @@ impl Daemon {
                     assert!(!new_state.running());
                     resps.send(c.as_response().unwrap_or(Response::Ack).as_json())?;
                 }
+                Command::Respond(response) => {
+                    log::info!("Responding with: {:?}", response);
+                    log::info!("Actually responding with: {:?}", response.as_json());
+                    resps.send(response.as_json())?;
+                }
             }
         }
+
         resps.send(
             serde_json::to_value(Response::Exit(exit_code)).expect("Failed to serialize response"),
         )?;

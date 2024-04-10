@@ -53,12 +53,13 @@ impl State {
                     false
                 }
             }
-            // Nothing changes about the state when we send a reset command. It's just about
-            // quitting.
+            // Nothing changes about the state when we send these commands, but we still need to
+            // return true so the event loop is triggered.
             //
-            // TODO: I should consider making the event loop not sort of dependent on changes in the
-            // state and find some other way to represent that.
+            // TODO: I should consider making the event loop not sort of dependent on changes in
+            // the state and find some other way to represent that.
             Command::Reset => true,
+            Command::Respond(_) => true,
         }
     }
 }
@@ -66,13 +67,13 @@ impl State {
 #[derive(Debug, Default, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(tag = "type", content = "data")]
 pub enum Mode {
-    #[default]
     #[serde(rename = "standard")]
     Standard,
 
     #[serde(rename = "clipboard")]
-    Clipboard,
+    Clipboard { use_clipboard: bool, use_llm: bool },
 
+    #[default]
     #[serde(rename = "live_typing")]
     LiveTyping,
 
