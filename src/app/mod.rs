@@ -1,4 +1,5 @@
 pub mod command;
+mod input;
 mod response;
 mod state;
 
@@ -14,6 +15,7 @@ use crate::sync;
 use crate::{socket::receive_instructions, whisper, App};
 
 use self::command::{CmdStream, Command};
+use self::input::iter;
 use self::response::Response;
 use self::state::{Chat, Mode};
 
@@ -40,53 +42,6 @@ impl Transcription {
     }
 }
 
-fn filter_words(
-    content: &str,
-    word_re: Option<regex::Regex>,
-) -> impl Iterator<Item = (usize, String)> + Clone + '_ {
-    let max_char_idx = content.chars().count() - 1;
-    content
-        .chars()
-        // Accumulate words and their offsets in bytes
-        .enumerate()
-        .scan(
-            (0, 0, String::new()),
-            move |(total_offset, word_start_offset, word), (i, c)| {
-                let bs = c.len_utf8();
-
-                if !c.is_whitespace() {
-                    // Mark the start of the word.
-                    if word.is_empty() && total_offset != word_start_offset {
-                        *word_start_offset = *total_offset;
-                    }
-
-                    word.push(c);
-                }
-
-                // Advance the offset.
-                *total_offset += bs;
-
-                // When we reach a word boundary and the word is at least one character long, or we
-                // know this is the last character, then output the word along with its start
-                // offset.
-                if (c.is_whitespace() && !word.is_empty()) || i == max_char_idx {
-                    let w = std::mem::take(word);
-                    Some(Some((*word_start_offset, w)))
-                } else {
-                    Some(None)
-                }
-                // I need to flush what's left at the end somehow.
-            },
-        )
-        .flatten()
-        .map(|(o, w)| {
-            log::debug!("Word: {:?} at offset: {:?}", w, o);
-            (o, w)
-        })
-        // Filter out words that don't match the regex
-        .filter(move |(_, w)| word_re.as_ref().map_or(true, |re| re.is_match(w)))
-}
-
 impl TryFrom<&Timing> for Command {
     type Error = ();
 
@@ -103,7 +58,8 @@ impl TryFrom<&Timing> for Command {
         }
 
         let word_re = Regex::new(r"^(set|mode|to|chat|live|clipboard)$").unwrap();
-        let mut words = filter_words(&content, Some(word_re)).map(|(_, w)| w);
+        let it = iter::Iter::from(content.to_string());
+        let mut words = it.words().map(|(_, w)| w).filter(|w| word_re.is_match(w));
 
         let prefix = words.clone().take(3).join(" ");
         log::info!("Prefix: {}", prefix);
@@ -140,8 +96,8 @@ impl TryFrom<&Timing> for Command {
 }
 
 fn handle_reset(content: &str) -> Option<Command> {
-    let words = filter_words(content, None);
-    let ((_, fst), (_, snd)) = words.tuple_windows().next()?;
+    let it = iter::Iter::from(content.to_string());
+    let ((_, fst), (_, snd)) = it.words().tuple_windows().next()?;
     match (fst.as_str(), snd.as_str()) {
         ("reset", "yourself") => Some(Command::Reset),
         _ => None,
@@ -149,7 +105,8 @@ fn handle_reset(content: &str) -> Option<Command> {
 }
 
 fn handle_hey_robot(content: &str) -> Option<Command> {
-    let words = filter_words(content, None).map(|(i, w)| {
+    let it = iter::Iter::from(content.to_string());
+    let words = it.words().map(|(i, w)| {
         (
             i,
             w.chars().filter(|c| c.is_alphabetic()).collect::<String>(),
@@ -157,9 +114,7 @@ fn handle_hey_robot(content: &str) -> Option<Command> {
     });
     log::debug!(
         "Words: {:?}",
-        filter_words(content, None)
-            .map(|(_, w)| w)
-            .collect::<Vec<_>>()
+        it.words().map(|(_, w)| w).collect::<Vec<_>>()
     );
     let ((_, fst), (_, snd), (o, _)) = words.tuple_windows().next()?;
     log::debug!("Fst: {:?}, Snd: {:?}", fst, snd);
