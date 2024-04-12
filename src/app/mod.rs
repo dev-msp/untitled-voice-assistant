@@ -10,6 +10,7 @@ use itertools::Itertools;
 use regex::Regex;
 use sttx::{IteratorExt, Timing};
 
+use crate::app::input::iter::alpha_only;
 use crate::audio::input::{controlled_recording, Recording};
 use crate::sync;
 use crate::{socket::receive_instructions, whisper, App};
@@ -59,9 +60,12 @@ impl TryFrom<&Timing> for Command {
 
         let word_re = Regex::new(r"^(set|mode|to|chat|live|clipboard)$").unwrap();
         let it = iter::Iter::from(content.to_string());
-        let mut words = it.words().map(|(_, w)| w).filter(|w| word_re.is_match(w));
+        let mut words = it
+            .words()
+            .map(alpha_only)
+            .filter(|bos| word_re.is_match(bos));
 
-        let prefix = words.clone().take(3).join(" ");
+        let prefix = words.clone().map(|bos| bos.to_string()).take(3).join(" ");
         log::info!("Prefix: {}", prefix);
 
         let mode = if prefix == "set mode to" {
@@ -69,8 +73,8 @@ impl TryFrom<&Timing> for Command {
         } else {
             let md = words.next();
             let wd = words.next();
-            match (md, wd.as_deref()) {
-                (Some(word), Some("mode")) => Some(word),
+            match (md, wd) {
+                (Some(word), Some(wd)) if wd.as_ref() == "mode" => Some(word),
                 _ => None,
             }
         };
@@ -81,7 +85,7 @@ impl TryFrom<&Timing> for Command {
 
         log::info!("Mode: {}", mode);
 
-        match mode.as_str() {
+        match mode.as_ref() {
             "chat" => Ok(Command::Mode(Mode::Chat(Chat::StartNew(
                 "You are a terse assistant with minimal affect.".into(),
             )))),
@@ -97,8 +101,8 @@ impl TryFrom<&Timing> for Command {
 
 fn handle_reset(content: &str) -> Option<Command> {
     let it = iter::Iter::from(content.to_string());
-    let ((_, fst), (_, snd)) = it.words().tuple_windows().next()?;
-    match (fst.as_str(), snd.as_str()) {
+    let (fst, snd) = it.words().tuple_windows().next()?;
+    match (fst.as_ref(), snd.as_ref()) {
         ("reset", "yourself") => Some(Command::Reset),
         _ => None,
     }
@@ -106,28 +110,21 @@ fn handle_reset(content: &str) -> Option<Command> {
 
 fn handle_hey_robot(content: &str) -> Option<Command> {
     let it = iter::Iter::from(content.to_string());
-    let words = it.words().map(|(i, w)| {
-        (
-            i,
-            w.chars().filter(|c| c.is_alphabetic()).collect::<String>(),
-        )
-    });
-    log::debug!(
-        "Words: {:?}",
-        it.words().map(|(_, w)| w).collect::<Vec<_>>()
-    );
-    let ((_, fst), (_, snd), (o, _)) = words.tuple_windows().next()?;
+    let words = it.words().map(alpha_only);
+
+    log::debug!("Words: {:?}", it.words().collect::<Vec<_>>());
+    let (fst, snd, fol) = words.tuple_windows().next()?;
     log::debug!("Fst: {:?}, Snd: {:?}", fst, snd);
-    match (fst.as_str(), snd.as_str()) {
+    match (fst.as_ref(), snd.as_ref()) {
         ("hey", "robot") => {
             let use_clipboard = content.contains("use the clipboard");
-            // SAFETY: the offset `o` is known to be within the bounds of the content string.
+            // SAFETY: From the implementation of ByteOffsetString, the segment offset is known to
+            // be within the bounds of the content string.
+            let slice = &content[fol.segment_offset()..];
             let content = if use_clipboard {
-                content[o..]
-                    .replace("clipboard", "content provided")
-                    .to_string()
+                slice.replace("clipboard", "content provided")
             } else {
-                content[o..].to_string()
+                slice.to_string()
             };
             Some(Command::Respond(Response::Transcription {
                 content: Some(content),
