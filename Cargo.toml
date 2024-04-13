@@ -14,7 +14,7 @@ linfa = "0.7.0"
 thiserror = "1.0.58"
 webrtc-vad = "0.4.0"
 whisper-rs = { git = "https://github.com/tazz4843/whisper-rs", branch = "master", features = [ "metal", "whisper-cpp-log" ] }
-sttx = { git = "file:///Users/matt/code/lang/rust/sttx", branch = "main" }
+sttx = { git = "https://github.com/dev-msp/sttx", branch = "main" }
 clap = { version = "4.5.4", features = ["derive"] }
 regex = "1.10.4"
 tracing = { version = "0.1.40", features = ["log"] }

@@ -1214,7 +1214,7 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 [[package]]
 name = "sttx"
 version = "0.1.0"
-source = "git+file:///Users/matt/code/lang/rust/sttx?branch=main#21c091821d4c27ee81c6da9c2ea07f77dc7f63e4"
+source = "git+https://github.com/dev-msp/sttx?branch=main#21c091821d4c27ee81c6da9c2ea07f77dc7f63e4"
 dependencies = [
  "clap",
  "csv",
