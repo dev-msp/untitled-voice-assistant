@@ -1,5 +1,5 @@
 use std::{
-    io::{BufRead, BufReader, Read, Write},
+    io::{self, BufRead, BufReader, Read, Write},
     os::unix::{
         fs::FileTypeExt,
         net::{UnixListener, UnixStream},
@@ -11,11 +11,53 @@ use std::{
 use anyhow::anyhow;
 use crossbeam::{
     atomic::AtomicCell,
-    channel::{unbounded, Receiver, Sender},
+    channel::{unbounded, Receiver, SendError, Sender},
 };
 use serde_json::Value;
 
 struct DebugBufReader<R: BufRead>(R);
+
+#[derive(Debug, thiserror::Error)]
+#[error("socket error: {0}")]
+enum Error {
+    Stream(#[from] std::io::Error),
+    Read(#[from] ReadError),
+    Write(#[from] WriteError),
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("read: {0}")]
+enum ReadError {
+    #[error("parse: {0}")]
+    Parse(#[from] serde_json::Error),
+
+    #[error("channel: {0}")]
+    Channel(#[from] SendError<Value>),
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("write error: {0}")]
+enum WriteError {
+    #[error("io: {0}")]
+    Io(#[from] io::Error),
+}
+
+impl Error {
+    fn is_broken_pipe(&self) -> bool {
+        match self {
+            Error::Write(WriteError::Io(e)) => e.kind() == io::ErrorKind::BrokenPipe,
+            _ => false,
+        }
+    }
+
+    fn recoverable(&self) -> bool {
+        if self.is_broken_pipe() {
+            return true;
+        }
+
+        matches!(self, Error::Read(ReadError::Parse(_)))
+    }
+}
 
 impl<R: BufRead> Read for DebugBufReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
@@ -40,7 +82,7 @@ fn write_thread(
     mut wstream: UnixStream,
     r: &Receiver<Value>,
     is_done: Arc<AtomicCell<bool>>,
-) -> thread::JoinHandle<Result<(), anyhow::Error>> {
+) -> thread::JoinHandle<Result<(), WriteError>> {
     let r = r.clone();
     thread::spawn(move || {
         while !is_done.load() {
@@ -61,7 +103,7 @@ fn read_thread(
     stream: UnixStream,
     s: Sender<Value>,
     is_done: Arc<AtomicCell<bool>>,
-) -> thread::JoinHandle<Result<(), anyhow::Error>> {
+) -> thread::JoinHandle<Result<(), ReadError>> {
     thread::spawn(move || {
         let reader = DebugBufReader(BufReader::new(stream));
         let it = reader.lines().flat_map(|l| {
@@ -86,12 +128,54 @@ fn read_thread(
     })
 }
 
+struct ThreadName<S: ToString>(Option<S>);
+
+impl<S: ToString> ThreadName<S> {
+    fn new(name: Option<S>) -> Self {
+        Self(name)
+    }
+
+    fn realize(self) -> String {
+        self.0
+            .map(|n| format!("thread named {}", n.to_string()))
+            .unwrap_or_else(|| "thread".to_string())
+    }
+}
+
+/// Opinionated function to handle thread join results
+///
+/// When the thread cannot be joined, this function will panic.
+fn settle_thread<T, E>(
+    handle: thread::JoinHandle<Result<T, E>>,
+    name: Option<&'static str>,
+) -> Result<T, Error>
+where
+    E: Into<Error>,
+{
+    let join_result = handle.join().unwrap_or_else(|_| {
+        panic!("Failed to join {} thread", ThreadName::new(name).realize());
+    });
+
+    match join_result.map_err(Into::into) {
+        Err(e) if e.recoverable() => {
+            log::warn!(
+                "Recoverable failure in {}: {:?}",
+                name.map(|n| format!("{} thread", n))
+                    .unwrap_or_else(|| "thread".to_string()),
+                e
+            );
+            Err(e)
+        }
+        x => x,
+    }
+}
+
 #[tracing::instrument(skip_all)]
 fn handle_stream(
     stream: UnixStream,
     cmd_send: Sender<Value>,
     res_recv: &Receiver<Value>,
-) -> Result<(), anyhow::Error> {
+) -> Result<(), Error> {
     let wstream = stream.try_clone()?;
     log::trace!("Cloned stream");
 
@@ -100,21 +184,20 @@ fn handle_stream(
     let reads = read_thread(stream, cmd_send, is_done.clone());
     let writes = write_thread(wstream, res_recv, is_done);
 
-    let w_outcome = writes.join().expect("Failed to join write thread");
-    let r_outcome = reads.join().expect("Failed to join read thread");
-
-    w_outcome.unwrap();
-    r_outcome.unwrap();
+    settle_thread(writes, Some("write"))?;
+    settle_thread(reads, Some("read"))?;
 
     log::debug!("Exiting handle_stream");
     Ok(())
 }
 
 type Handle = std::thread::JoinHandle<Result<(), anyhow::Error>>;
+type ChannelPair<T> = (Receiver<T>, Sender<T>);
 
-pub fn receive_instructions(
-    socket_path: &str,
-) -> Result<((Receiver<Value>, Sender<Value>), Sender<Value>, Handle), anyhow::Error> {
+// Triple of channel pair (commands), sender (responses), and handle for the socket thread
+type InstructionHandle = (ChannelPair<Value>, Sender<Value>, Handle);
+
+pub fn receive_instructions(socket_path: &str) -> Result<InstructionHandle, anyhow::Error> {
     match std::fs::metadata(socket_path) {
         Ok(metadata) if metadata.file_type().is_socket() => {
             std::fs::remove_file(socket_path)?;
@@ -134,7 +217,10 @@ pub fn receive_instructions(
 
             let mut incoming = listener.incoming();
             while let Some(rstream) = incoming.next().transpose()? {
-                handle_stream(rstream, csend.clone(), &rrecv)?;
+                match handle_stream(rstream, csend.clone(), &rrecv) {
+                    Err(e) if e.recoverable() => Ok(()),
+                    x => x,
+                }?
             }
             log::warn!("Listener done providing streams");
             Ok(())
