@@ -1,3 +1,4 @@
+use anyhow::anyhow;
 use std::thread::JoinHandle;
 
 use crossbeam::channel::{unbounded, Receiver, SendError};
@@ -7,14 +8,18 @@ use whisper_rs::{convert_integer_to_float_audio, FullParams, WhisperContext, Whi
 
 pub struct Whisper {
     context: WhisperContext,
+    strategy: whisper_rs::SamplingStrategy,
 }
 
 impl Whisper {
-    pub fn new(model_path: &str) -> Result<Self, WhisperError> {
+    pub fn new(
+        model_path: &str,
+        strategy: whisper_rs::SamplingStrategy,
+    ) -> Result<Self, WhisperError> {
         let mut params = whisper_rs::WhisperContextParameters::default();
         params.use_gpu(true);
         let context = whisper_rs::WhisperContext::new_with_params(model_path, params)?;
-        Ok(Self { context })
+        Ok(Self { context, strategy })
     }
 
     pub fn create_state(&self) -> Result<whisper_rs::WhisperState, WhisperError> {
@@ -27,7 +32,7 @@ impl Whisper {
     {
         let mut state = self.create_state()?;
 
-        let mut params = FullParams::new(whisper_rs::SamplingStrategy::Greedy { best_of: 2 });
+        let mut params = FullParams::new(self.strategy.clone());
         // params.set_audio_ctx({
         //     let blen = data.as_ref().len();
         //     let audio_secs = blen as f32 / 16000.0;
@@ -104,10 +109,11 @@ type WorkerHandle = (
 
 pub fn transcription_worker(
     model: &str,
+    strategy: whisper_rs::SamplingStrategy,
     jobs: Receiver<Vec<i16>>,
 ) -> Result<WorkerHandle, anyhow::Error> {
     let (snd, recv) = unbounded();
-    let whisper = Whisper::new(model)?;
+    let whisper = Whisper::new(model, strategy)?;
 
     Ok((
         recv,
@@ -123,4 +129,118 @@ pub fn transcription_worker(
             Ok(())
         }),
     ))
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum StrategyOpt {
+    Greedy { best_of: i32 },
+    Beam { beam_size: i32, patience: f32 },
+}
+
+impl Default for StrategyOpt {
+    fn default() -> Self {
+        StrategyOpt::Greedy { best_of: 1 }
+    }
+}
+
+impl From<StrategyOpt> for whisper_rs::SamplingStrategy {
+    fn from(opt: StrategyOpt) -> Self {
+        match opt {
+            StrategyOpt::Greedy { best_of } => whisper_rs::SamplingStrategy::Greedy { best_of },
+            StrategyOpt::Beam {
+                beam_size,
+                patience,
+            } => whisper_rs::SamplingStrategy::BeamSearch {
+                beam_size,
+                patience,
+            },
+        }
+    }
+}
+
+pub fn parse_strategy(s: &str) -> Result<StrategyOpt, anyhow::Error> {
+    let mut parts = s.split(':');
+    let (kind, n) = (
+        parts
+            .next()
+            .ok_or(anyhow!("strategy must be of the form 'qkind' or 'kind:n'"))?,
+        parts.next().map(|s| s.parse()).transpose()?,
+    );
+    Ok(match kind {
+        "greedy" => {
+            let n = n.unwrap_or(2);
+            if n < 1 {
+                return Err(anyhow!("best_of must be at least 1"));
+            }
+            StrategyOpt::Greedy { best_of: n }
+        }
+        "beam" => {
+            let n = n.unwrap_or(10);
+            if n < 1 {
+                return Err(anyhow!("beam_size must be at least 1"));
+            }
+            let patience = parts.next().map(|s| s.parse()).transpose()?.unwrap_or(0.0);
+            StrategyOpt::Beam {
+                beam_size: n,
+                patience,
+            }
+        }
+        _ => return Err(anyhow!("invalid strategy")),
+    })
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_parse_strategy() {
+        assert_eq!(
+            parse_strategy("greedy").unwrap(),
+            StrategyOpt::Greedy { best_of: 2 }
+        );
+        assert_eq!(
+            parse_strategy("greedy:3").unwrap(),
+            StrategyOpt::Greedy { best_of: 3 }
+        );
+        assert_eq!(
+            parse_strategy("beam").unwrap(),
+            StrategyOpt::Beam {
+                beam_size: 10,
+                patience: 0.0
+            }
+        );
+        assert_eq!(
+            parse_strategy("beam:5").unwrap(),
+            StrategyOpt::Beam {
+                beam_size: 5,
+                patience: 0.0
+            }
+        );
+        assert_eq!(
+            parse_strategy("beam:5:0.5").unwrap(),
+            StrategyOpt::Beam {
+                beam_size: 5,
+                patience: 0.5
+            }
+        );
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_bad_beam_parse() {
+        parse_strategy("beam:0").unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_bad_greedy_parse() {
+        parse_strategy("greedy:0").unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_bad_parse() {
+        parse_strategy("berm").unwrap();
+    }
 }
