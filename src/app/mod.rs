@@ -66,7 +66,7 @@ impl TryFrom<&Timing> for Command {
             .filter(|bos| word_re.is_match(bos));
 
         let prefix = words.clone().map(|bos| bos.to_string()).take(3).join(" ");
-        log::info!("Prefix: {}", prefix);
+        log::trace!("Prefix: {}", prefix);
 
         let mode = if prefix == "set mode to" {
             words.nth(3)
@@ -112,9 +112,9 @@ fn handle_hey_robot(content: &str) -> Option<Command> {
     let it = iter::Iter::from(content.to_string());
     let words = it.words().map(alpha_only);
 
-    log::debug!("Words: {:?}", it.words().collect::<Vec<_>>());
+    log::trace!("Words: {:?}", it.words().collect::<Vec<_>>());
     let (fst, snd, fol) = words.tuple_windows().next()?;
-    log::debug!("Fst: {:?}, Snd: {:?}", fst, snd);
+    log::trace!("Fst: {:?}, Snd: {:?}", fst, snd);
     match (fst.as_ref(), snd.as_ref()) {
         ("hey", "robot") => {
             let use_clipboard = content.contains("use the clipboard");
@@ -218,6 +218,7 @@ impl Daemon {
                             let t = Transcription(t).process();
 
                             if t.is_some() {
+                                log::info!("Transcribed: \"{}\"", t.as_ref().unwrap().content());
                                 log::info!("Took {:?} to transcribe", now.elapsed(),);
                             } else {
                                 log::info!("No transcription");
@@ -260,7 +261,6 @@ impl Daemon {
                 }
                 Command::Respond(response) => {
                     log::info!("Responding with: {:?}", response);
-                    log::info!("Actually responding with: {:?}", response.as_json());
                     resps.send(response.as_json())?;
                 }
             }

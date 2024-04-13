@@ -56,14 +56,14 @@ impl CmdStream {
     ) -> impl Iterator<Item = Result<(Command, Option<State>), serde_json::Error>> + 'a {
         self.iter().map_ok(move |cmd| {
             log::debug!("Received command: {:?}", cmd);
-            log::debug!("Current state: {:?}", state);
+            log::trace!("Current state: {:?}", state);
             let initial = state.clone();
             let out = state.next_state(&cmd);
             if out {
-                log::debug!("State transitioned to {:?}", state);
+                log::trace!("State transitioned to {:?}", state);
                 (cmd, Some(state.clone()))
             } else {
-                log::debug!("No state transition from {:?}", initial);
+                log::trace!("No state transition from {:?}", initial);
                 (cmd, None)
             }
         })

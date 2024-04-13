@@ -93,7 +93,7 @@ fn handle_stream(
     res_recv: &Receiver<Value>,
 ) -> Result<(), anyhow::Error> {
     let wstream = stream.try_clone()?;
-    log::debug!("Cloned stream");
+    log::trace!("Cloned stream");
 
     let is_done = Arc::new(AtomicCell::new(false));
 
