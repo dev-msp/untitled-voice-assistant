@@ -14,11 +14,17 @@ impl From<&str> for Iter {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct ByteOffsetString {
     segment_start: usize,
     cursor: usize,
     sub: String,
+}
+
+impl std::fmt::Debug for ByteOffsetString {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?} @ {}", self.sub, self.segment_start)
+    }
 }
 
 impl AsRef<str> for ByteOffsetString {
