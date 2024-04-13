@@ -18,6 +18,9 @@ struct App {
     #[clap(short, long)]
     model: String,
 
+    #[clap(short, long, value_parser = whisper::parse_strategy)]
+    strategy: Option<whisper::StrategyOpt>,
+
     /// Pattern to match against device name
     #[clap(long)]
     device_name: Option<String>,
@@ -25,6 +28,12 @@ struct App {
     /// Socket path
     #[clap(long)]
     socket_path: String,
+}
+
+impl App {
+    pub fn strategy(&self) -> whisper_rs::SamplingStrategy {
+        self.strategy.clone().unwrap_or_default().into()
+    }
 }
 
 fn device_matching_name(name: &str) -> Result<cpal::Device, anyhow::Error> {

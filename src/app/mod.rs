@@ -157,7 +157,8 @@ impl Daemon {
             .ok_or_else(|| anyhow!("No input device"))?;
 
         let (to_whisper, from_recordings) = unbounded();
-        let (whisper_output, tx_worker) = whisper::transcription_worker(&model, from_recordings)?;
+        let (whisper_output, tx_worker) =
+            whisper::transcription_worker(&model, self.app.strategy(), from_recordings)?;
 
         let ((rcmds, scmds), resps, listener) = receive_instructions(&self.app.socket_path)?;
         let mut commands = CmdStream::new(rcmds);
