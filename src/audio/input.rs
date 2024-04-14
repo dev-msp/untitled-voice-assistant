@@ -6,10 +6,7 @@ use std::{
 };
 
 use anyhow::anyhow;
-use cpal::{
-    traits::{DeviceTrait, HostTrait, StreamTrait},
-    Sample,
-};
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam::channel::Sender;
 use whisper_rs::convert_stereo_to_mono_audio;
 
@@ -85,8 +82,8 @@ impl Controller {
     }
 }
 
-pub trait MySample: Send + hound::Sample + Sample + 'static {}
-impl<S> MySample for S where S: Send + hound::Sample + Sample + 'static {}
+pub trait MySample: Send + hound::Sample + cpal::Sample + 'static {}
+impl<S> MySample for S where S: Send + hound::Sample + cpal::Sample + 'static {}
 
 pub struct Recording<S, RS, RE = anyhow::Error>
 where
@@ -107,6 +104,7 @@ where
 {
     #[error("failed to join recording thread")]
     Sync,
+
     #[error("{0}")]
     Other(E),
 }
@@ -185,7 +183,7 @@ pub fn record_from_input_device<S>(
     controller: Controller,
 ) -> Result<(), anyhow::Error>
 where
-    S: Send + hound::Sample + Sample + 'static,
+    S: MySample,
 {
     let device = host
         .input_devices()?
@@ -243,8 +241,8 @@ where
 
 fn write_input_data<T, U>(input: &[T], chan: Sender<U>) -> Result<(), mpsc::SendError<U>>
 where
-    T: Sample,
-    U: Sample + hound::Sample,
+    T: cpal::Sample,
+    U: cpal::Sample + hound::Sample,
 {
     for &sample in input.iter() {
         let sample: U = U::from(&sample);
