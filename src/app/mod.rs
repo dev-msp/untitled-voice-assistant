@@ -12,8 +12,7 @@ use sttx::{IteratorExt, Timing};
 
 use crate::app::input::iter::alpha_only;
 use crate::audio::input::{controlled_recording, Recording};
-use crate::sync;
-use crate::{socket::receive_instructions, whisper, App};
+use crate::{socket::receive_instructions, sync, whisper, DaemonInit};
 
 use self::command::{CmdStream, Command};
 use self::input::iter;
@@ -21,7 +20,7 @@ use self::response::Response;
 use self::state::{Chat, Mode};
 
 pub struct Daemon {
-    app: App,
+    config: DaemonInit,
     input_device: Option<Device>,
     state: state::State,
 }
@@ -139,9 +138,9 @@ fn handle_hey_robot(content: &str) -> Option<Command> {
 }
 
 impl Daemon {
-    pub fn new(app: App, input_device: Option<Device>) -> Self {
+    pub fn new(config: DaemonInit, input_device: Option<Device>) -> Self {
         Self {
-            app,
+            config,
             input_device,
             state: state::State::default(),
         }
@@ -150,7 +149,7 @@ impl Daemon {
     /// Runs the main application loop.
     ///
     pub fn run_loop(&mut self) -> Result<bool, anyhow::Error> {
-        let model = self.app.model.clone();
+        let model = self.config.model.clone();
         let device = self
             .input_device
             .as_ref()
@@ -158,9 +157,9 @@ impl Daemon {
 
         let (to_whisper, from_recordings) = unbounded();
         let (whisper_output, tx_worker) =
-            whisper::transcription_worker(&model, self.app.strategy(), from_recordings)?;
+            whisper::transcription_worker(&model, self.config.strategy(), from_recordings)?;
 
-        let ((rcmds, scmds), resps, listener) = receive_instructions(&self.app.socket_path)?;
+        let ((rcmds, scmds), resps, listener) = receive_instructions(&self.config.socket_path)?;
         let mut commands = CmdStream::new(rcmds);
 
         #[allow(unused_assignments)]
@@ -276,7 +275,7 @@ impl Daemon {
         listener.join().unwrap()?;
 
         // remove socket
-        std::fs::remove_file(&self.app.socket_path)?;
+        std::fs::remove_file(&self.config.socket_path)?;
         Ok(false)
     }
 }
