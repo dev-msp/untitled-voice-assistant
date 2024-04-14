@@ -8,6 +8,8 @@ Uses [`whisper.cpp`](https://github.com/ggerganov/whisper.cpp) by way of [`whisp
 
 Bind to hotkeys as you prefer. I'm running the server as a daemon with `launchd`.
 
+If you don't already have a `whisper.cpp`-compatible model, follow that project's [quick-start instructions](https://github.com/ggerganov/whisper.cpp#quick-start) to get one.
+
 Start the server:
 `./run.sh macbook ggml-base.en.bin /tmp/whisper.sock`
 
