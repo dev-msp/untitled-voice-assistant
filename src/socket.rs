@@ -192,10 +192,9 @@ fn handle_stream(
 }
 
 type Handle = std::thread::JoinHandle<Result<(), anyhow::Error>>;
-type ChannelPair<T> = (Receiver<T>, Sender<T>);
 
 // Triple of channel pair (commands), sender (responses), and handle for the socket thread
-type InstructionHandle = (ChannelPair<Value>, Sender<Value>, Handle);
+type InstructionHandle = (Receiver<Value>, Sender<Value>, Handle);
 
 pub fn receive_instructions(socket_path: &str) -> Result<InstructionHandle, anyhow::Error> {
     match std::fs::metadata(socket_path) {
@@ -210,7 +209,7 @@ pub fn receive_instructions(socket_path: &str) -> Result<InstructionHandle, anyh
     let (rsend, rrecv) = unbounded();
     let sock_path = socket_path.to_string();
     Ok((
-        (crecv, csend.clone()),
+        crecv,
         rsend,
         std::thread::spawn(move || {
             let listener = UnixListener::bind(sock_path).expect("Failed to bind to socket");

@@ -33,10 +33,6 @@ impl Command {
             _ => None,
         }
     }
-
-    pub fn as_json(&self) -> serde_json::Value {
-        serde_json::to_value(self).unwrap()
-    }
 }
 
 pub struct CmdStream(Receiver<serde_json::Value>);
