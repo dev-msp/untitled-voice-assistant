@@ -11,6 +11,7 @@ use cpal::{
     Sample,
 };
 use crossbeam::channel::Sender;
+use whisper_rs::convert_stereo_to_mono_audio;
 
 #[derive(Debug, Clone)]
 pub struct Notifier<T: Clone>(Arc<(Mutex<T>, Condvar)>);
@@ -191,7 +192,7 @@ where
         .find(|x| x.name().map(|x| x.contains(&device_name)).unwrap_or(false))
         .ok_or(anyhow!("no input device available"))?;
 
-    let config = device
+    let supported_config = device
         .supported_input_configs()?
         .map(|c| {
             log::debug!(
@@ -203,23 +204,33 @@ where
             c
         })
         .find_map(|c| {
-            let is_mono = c.channels() == 1;
-            let supports_16k = c.max_sample_rate().0 >= 16000 && c.min_sample_rate().0 <= 16000;
-            (is_mono && supports_16k).then(|| c.with_sample_rate(cpal::SampleRate(16000)))
+            (c.max_sample_rate().0 >= 16000 && c.min_sample_rate().0 <= 16000)
+                .then(|| c.with_sample_rate(cpal::SampleRate(16000)))
         })
         .ok_or(anyhow!("no supported input configuration"))?;
 
     controller.wait_for(RecordState::Started);
 
     {
-        let stream = match config.sample_format() {
-            cpal::SampleFormat::F32 => device.build_input_stream(
-                &config.into(),
-                move |data, _| {
-                    write_input_data::<f32, S>(data, chan.clone()).expect("failed to write data")
-                },
-                move |err| log::trace!("an error occurred on stream: {}", err),
-            )?,
+        let stream = match supported_config.sample_format() {
+            cpal::SampleFormat::F32 => {
+                let cfg = supported_config.clone().into();
+                let is_mono = supported_config.channels() == 1;
+                device.build_input_stream(
+                    &cfg,
+                    move |data, _| {
+                        if !is_mono {
+                            let mono_data = convert_stereo_to_mono_audio(data)
+                                .expect("failed to convert stereo to mono");
+                            write_input_data::<f32, S>(&mono_data, chan.clone())
+                        } else {
+                            write_input_data::<f32, S>(data, chan.clone())
+                        }
+                        .expect("failed to write data")
+                    },
+                    move |err| log::trace!("an error occurred on stream: {}", err),
+                )?
+            }
             _ => panic!("unsupported sample format"),
         };
         stream.play()?;
