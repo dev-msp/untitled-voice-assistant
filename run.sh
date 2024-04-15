@@ -25,7 +25,7 @@ model_path="$2"
 # The Unix socket the program will read and write to.
 socket_path="$3"
 
-./voice \
+./voice run-daemon \
     --socket-path "$socket_path" \
     --model       "$model_path" \
     --device-name "$device_name"

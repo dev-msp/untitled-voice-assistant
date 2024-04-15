@@ -1,53 +1,39 @@
 use anyhow::anyhow;
-use std::thread::JoinHandle;
+use std::{thread::JoinHandle, time::Duration};
 
 use crossbeam::channel::{unbounded, Receiver, SendError};
 use itertools::Itertools;
 use sttx::Timing;
-use whisper_rs::{convert_integer_to_float_audio, FullParams, WhisperContext, WhisperError};
+use whisper_rs::{FullParams, WhisperContext, WhisperError};
 
 pub struct Whisper {
     context: WhisperContext,
-    strategy: whisper_rs::SamplingStrategy,
 }
 
 impl Whisper {
-    pub fn new(
-        model_path: &str,
-        strategy: whisper_rs::SamplingStrategy,
-    ) -> Result<Self, WhisperError> {
+    pub fn new(model_path: &str) -> Result<Self, WhisperError> {
         let mut params = whisper_rs::WhisperContextParameters::default();
         params.use_gpu(true);
         let context = whisper_rs::WhisperContext::new_with_params(model_path, params)?;
-        Ok(Self { context, strategy })
+        Ok(Self { context })
     }
 
     pub fn create_state(&self) -> Result<whisper_rs::WhisperState, WhisperError> {
         self.context.create_state()
     }
 
-    pub fn transcribe_audio<T>(&self, data: T) -> Result<Vec<sttx::Timing>, WhisperError>
-    where
-        T: AsRef<[f32]>,
-    {
+    pub fn transcribe_audio(
+        &self,
+        job: TranscriptionJob,
+    ) -> Result<Vec<sttx::Timing>, WhisperError> {
         let mut state = self.create_state()?;
 
-        let mut params = FullParams::new(self.strategy.clone());
-        // params.set_audio_ctx({
-        //     let blen = data.as_ref().len();
-        //     let audio_secs = blen as f32 / 16000.0;
-        //     log::debug!("audio_secs: {}", audio_secs);
-        //     if audio_secs > 30.0 {
-        //         1500
-        //     } else {
-        //         ((audio_secs / 30.0 * 1500.0) as i32).max(128)
-        //     }
-        // });
+        let mut params = FullParams::new(job.strategy);
         params.set_token_timestamps(true);
         params.set_max_len(1);
         params.set_split_on_word(true);
 
-        match state.full(params, data.as_ref()) {
+        match state.full(params, job.audio.as_slice()) {
             Ok(0) => {}
             Ok(n) => return Err(WhisperError::GenericError(n)),
             Err(e) => return Err(e),
@@ -107,22 +93,41 @@ type WorkerHandle = (
     JoinHandle<Result<(), TranscriptionError>>,
 );
 
+#[derive(Debug)]
+pub struct TranscriptionJob {
+    audio: Vec<f32>,
+    strategy: whisper_rs::SamplingStrategy,
+    sample_rate: i32,
+}
+
+impl TranscriptionJob {
+    pub fn new(audio: Vec<f32>, strategy: whisper_rs::SamplingStrategy, sample_rate: i32) -> Self {
+        Self {
+            audio,
+            strategy,
+            sample_rate,
+        }
+    }
+
+    pub fn duration(&self) -> Duration {
+        Duration::from_secs_f32(self.audio.len() as f32 / self.sample_rate as f32)
+    }
+}
+
 pub fn transcription_worker(
     model: &str,
-    strategy: whisper_rs::SamplingStrategy,
-    jobs: Receiver<Vec<i16>>,
+    jobs: Receiver<TranscriptionJob>,
 ) -> Result<WorkerHandle, anyhow::Error> {
     let (snd, recv) = unbounded();
-    let whisper = Whisper::new(model, strategy)?;
+    let whisper = Whisper::new(model)?;
 
     Ok((
         recv,
         std::thread::spawn(move || {
-            for audio in jobs.iter() {
-                let mut audio_fl = vec![0_f32; audio.len()];
-                convert_integer_to_float_audio(&audio, &mut audio_fl)?;
+            for job in jobs.iter() {
+                log::debug!("Transcribing audio with duration: {:?}", job.duration());
                 let results = whisper
-                    .transcribe_audio(audio_fl)
+                    .transcribe_audio(job)
                     .map_err(TranscriptionError::from);
                 snd.send(results).map_err(Box::new)?;
             }
@@ -139,7 +144,10 @@ pub enum StrategyOpt {
 
 impl Default for StrategyOpt {
     fn default() -> Self {
-        StrategyOpt::Greedy { best_of: 1 }
+        StrategyOpt::Beam {
+            beam_size: 5,
+            patience: 0.0,
+        }
     }
 }
 
