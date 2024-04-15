@@ -6,7 +6,10 @@ use std::{
 };
 
 use anyhow::anyhow;
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::{
+    traits::{DeviceTrait, HostTrait, StreamTrait},
+    StreamConfig,
+};
 use crossbeam::channel::Sender;
 use rubato::{FftFixedOut, Resampler, ResamplerConstructionError};
 use whisper_rs::convert_stereo_to_mono_audio;
@@ -92,7 +95,7 @@ where
     RS: Send,
     RE: Send,
 {
-    handle: thread::JoinHandle<Result<(), RE>>,
+    handle: thread::JoinHandle<Result<StreamConfig, RE>>,
     controller: Controller,
     phantom: std::marker::PhantomData<S>,
     receiving_handle: thread::JoinHandle<RS>,
@@ -113,8 +116,8 @@ where
 impl<S, RS, RE> Recording<S, RS, RE>
 where
     S: MySample,
-    RS: Send,
-    RE: Send + Sync + Display,
+    RS: Send + Into<Vec<f32>>,
+    RE: Send + Sync + Display + Debug,
 {
     #[tracing::instrument(skip(self))]
     pub fn start(&self) {
@@ -123,21 +126,28 @@ where
         log::info!("Recording started");
     }
 
-    pub fn stop(self) -> Result<RS, RecordingError<RE>> {
+    pub fn stop(self) -> Result<(StreamConfig, Vec<f32>), RecordingError<RE>> {
         self.controller.stop();
-        let _ = Self::join_handle(self.handle)?;
+        let metadata = Self::join_handle(self.handle)
+            .map_err(|e| {
+                log::error!("Error joining recording thread: {}", e);
+                RecordingError::<RE>::Sync
+            })
+            .unwrap()
+            .map_err(|e| {
+                log::error!("Error joining recording thread: {}", e);
+                RecordingError::Other(e)
+            })?;
 
-        Self::join_handle(self.receiving_handle)
+        let audio = Self::join_handle(self.receiving_handle)?.into();
+        Ok((metadata, audio))
     }
 
-    fn join_handle<T, E>(handle: thread::JoinHandle<T>) -> Result<T, RecordingError<E>>
-    where
-        E: Display + Send + Sync + 'static,
-    {
+    fn join_handle<T>(handle: thread::JoinHandle<T>) -> Result<T, RecordingError<RE>> {
         match handle.join() {
             Ok(inner) => Ok(inner),
             Err(e) => {
-                let inner: Box<E> = e.downcast::<E>().map_err(|_| RecordingError::Sync)?;
+                let inner: Box<RE> = e.downcast::<RE>().map_err(|_| RecordingError::Sync)?;
                 Err(RecordingError::Other(*inner))
             }
         }
@@ -182,7 +192,7 @@ pub fn record_from_input_device<S>(
     device_name: String,
     chan: Sender<S>,
     controller: Controller,
-) -> Result<(), anyhow::Error>
+) -> Result<StreamConfig, anyhow::Error>
 where
     S: MySample,
 {
@@ -241,7 +251,7 @@ where
     }
     let mut resampler = resampler.lock().expect("failed to lock resampler");
     resampler.flush_to_sink()?;
-    Ok(())
+    Ok(cfg)
 }
 
 struct Processor<S, O>
