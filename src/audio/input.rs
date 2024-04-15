@@ -288,7 +288,9 @@ where
         let resampler = FftFixedOut::new(input_rate, 16_000, chunk_size_out, 1, channels)?;
 
         Ok(Self {
-            buffer: Vec::with_capacity(resampler.nbr_channels() * resampler.input_frames_next()),
+            buffer: Vec::with_capacity(
+                chunk_size_out.max(resampler.nbr_channels() * resampler.input_frames_max()),
+            ),
             config,
             resampler,
             sink,
@@ -328,7 +330,7 @@ impl<O: MySample> Processor<f32, O> {
     }
 
     fn input_buffer(&self) -> Vec<f32> {
-        let cap = self.resampler.nbr_channels() * self.resampler.input_frames_max();
+        let cap = self.buffer.capacity();
         log::trace!("Allocating input buffer with capacity: {}", cap);
         Vec::with_capacity(cap)
     }
