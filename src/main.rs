@@ -5,9 +5,10 @@ mod sync;
 mod whisper;
 
 use anyhow::anyhow;
-
+use app::{command::Command, response::Response};
 use clap::Parser;
 use cpal::traits::{DeviceTrait, HostTrait};
+use crossbeam::channel::{Receiver, Sender};
 use whisper_rs::install_whisper_log_trampoline;
 
 use crate::app::Daemon;
@@ -41,6 +42,9 @@ struct DaemonInit {
     /// Socket path
     #[clap(long)]
     socket_path: String,
+
+    #[clap(long)]
+    serve: bool,
 }
 
 impl DaemonInit {
@@ -58,6 +62,23 @@ fn device_matching_name(name: &str) -> Result<cpal::Device, anyhow::Error> {
         .ok_or(anyhow!("no input device available"))?;
 
     Ok(device)
+}
+fn run_daemon(
+    app: DaemonInit,
+    commands: Receiver<Command>,
+    responses: Sender<Response>,
+) -> Result<bool, anyhow::Error> {
+    log::info!("Launching with settings: {:?}", app);
+
+    let device = device_matching_name(
+        &app.device_name
+            .clone()
+            .ok_or(anyhow!("no device name provided"))?,
+    )?;
+
+    let mut daemon = Daemon::new(app, Some(device));
+
+    daemon.run_loop(commands, responses)
 }
 
 fn main() -> Result<(), anyhow::Error> {
@@ -89,26 +110,16 @@ fn main() -> Result<(), anyhow::Error> {
                     buf_ceil
                 );
             }
-            return Ok(());
+            Ok(())
         }
         Commands::RunDaemon(app) => {
-            log::info!("Launching with settings: {:?}", app);
-
-            let device = match &app.device_name {
-                Some(n) => device_matching_name(n)?,
-                None => cpal::default_host()
-                    .default_input_device()
-                    .ok_or(anyhow!("no input device available"))?,
-            };
-
-            log::info!("Found device: {:?}", device.name()?);
-
-            let mut daemon = Daemon::new(app, Some(device));
-            let should_reset = daemon.run_loop()?;
-            if should_reset {
+            let (rcmds, resps, listener) = socket::receive_instructions(app.socket_path.clone())?;
+            let should_restart = run_daemon(app, rcmds, resps)?;
+            listener.join().expect("failed to join listener thread")?;
+            if should_restart {
                 std::process::exit(1);
             }
+            Ok(())
         }
     }
-    Ok(())
 }

@@ -54,9 +54,3 @@ impl std::fmt::Display for Response {
         }
     }
 }
-
-impl Response {
-    pub fn as_json(&self) -> serde_json::Value {
-        serde_json::to_value(self).unwrap()
-    }
-}

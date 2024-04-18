@@ -1,5 +1,4 @@
 use crossbeam::channel::Receiver;
-use itertools::Itertools;
 
 use super::{
     response::Response,
@@ -35,22 +34,22 @@ impl Command {
     }
 }
 
-pub struct CmdStream(Receiver<serde_json::Value>);
+pub struct CmdStream(Receiver<Command>);
 
 impl CmdStream {
-    pub fn new(recv: Receiver<serde_json::Value>) -> Self {
+    pub fn new(recv: Receiver<Command>) -> Self {
         Self(recv)
     }
 
-    pub fn iter(&mut self) -> impl Iterator<Item = Result<Command, serde_json::Error>> + '_ {
-        self.0.iter().map(serde_json::from_value)
+    pub fn iter(&mut self) -> impl Iterator<Item = Command> + '_ {
+        self.0.iter()
     }
 
     pub fn run_state_machine<'a>(
         &'a mut self,
         state: &'a mut super::state::State,
-    ) -> impl Iterator<Item = Result<(Command, Option<State>), serde_json::Error>> + 'a {
-        self.iter().map_ok(move |cmd| {
+    ) -> impl Iterator<Item = (Command, Option<State>)> + 'a {
+        self.iter().map(move |cmd| {
             log::debug!("Received command: {:?}", cmd);
             log::trace!("Current state: {:?}", state);
             let initial = state.clone();
