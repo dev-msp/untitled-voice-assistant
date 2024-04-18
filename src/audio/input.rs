@@ -8,11 +8,13 @@ use std::{
 use anyhow::anyhow;
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
-    StreamConfig,
+    SampleRate, StreamConfig,
 };
 use crossbeam::channel::Sender;
 use rubato::{FftFixedOut, Resampler, ResamplerConstructionError};
 use whisper_rs::convert_stereo_to_mono_audio;
+
+use crate::app::state::RecordingSession;
 
 #[derive(Debug, Clone)]
 pub struct Notifier<T: Clone>(Arc<(Mutex<T>, Condvar)>);
@@ -155,7 +157,7 @@ where
 }
 
 pub fn controlled_recording<S, RS>(
-    device: &cpal::Device,
+    session: RecordingSession,
     node: crate::sync::ProcessNode<S, RS>,
 ) -> Recording<S, RS>
 where
@@ -165,17 +167,14 @@ where
     let controller = Controller::new();
 
     let c2 = controller.clone();
-    let device_name = device.name().unwrap().to_string();
 
     let (sink_send, sink_handle) = node.run();
 
     let handle = thread::spawn(move || {
-        record_from_input_device::<S>(&cpal::default_host(), device_name, sink_send, c2).map_err(
-            |e| {
-                log::error!("Error attempting to record from input device: {}", e);
-                e
-            },
-        )
+        record_from_input_device::<S>(session, sink_send, c2).map_err(|e| {
+            log::error!("Error attempting to record from input device: {}", e);
+            e
+        })
     });
 
     Recording {
@@ -188,17 +187,21 @@ where
 
 #[tracing::instrument(skip_all)]
 pub fn record_from_input_device<S>(
-    host: &cpal::Host,
-    device_name: String,
+    session: RecordingSession,
     chan: Sender<S>,
     controller: Controller,
 ) -> Result<StreamConfig, anyhow::Error>
 where
     S: MySample,
 {
+    let host = cpal::default_host();
     let device = host
         .input_devices()?
-        .find(|x| x.name().map(|x| x.contains(&device_name)).unwrap_or(false))
+        .find(|x| {
+            x.name()
+                .map(|x| x.contains(session.device_name()))
+                .unwrap_or(false)
+        })
         .ok_or(anyhow!("no input device available"))?;
 
     let supported_config = device
@@ -212,11 +215,16 @@ where
             );
             c
         })
-        .map(|c| {
-            let min_sample_rate = c.min_sample_rate();
-            c.with_sample_rate(min_sample_rate)
+        .find_map(|c| {
+            if c.min_sample_rate() > SampleRate(session.sample_rate())
+                || c.max_sample_rate() < SampleRate(session.sample_rate())
+            {
+                None
+            } else {
+                let min_sample_rate = c.min_sample_rate();
+                Some(c.with_sample_rate(min_sample_rate))
+            }
         })
-        .next()
         .ok_or(anyhow!("no supported input configuration"))?;
 
     controller.wait_for(RecordState::Started);

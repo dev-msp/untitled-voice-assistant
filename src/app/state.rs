@@ -1,9 +1,6 @@
 use std::sync::Arc;
 
-use cpal::{
-    traits::{DeviceTrait, HostTrait},
-    Device,
-};
+use cpal::{traits::DeviceTrait, Device};
 use serde::{ser::SerializeStruct, Serialize, Serializer};
 
 use super::command::Command;
@@ -12,6 +9,16 @@ use super::command::Command;
 pub struct RecordingSession {
     input_device: String,
     sample_rate: u32,
+}
+
+impl RecordingSession {
+    pub fn device_name(&self) -> &str {
+        &self.input_device
+    }
+
+    pub fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
 }
 
 #[derive(Debug, Default, Clone, serde::Deserialize, serde::Serialize)]
@@ -62,52 +69,9 @@ impl Serialize for SupportedDevice {
     }
 }
 
-impl SupportedDevice {
-    fn name(&self) -> Result<String, cpal::DeviceNameError> {
-        self.device.name()
-    }
-
-    fn matches_session(&self, session: &RecordingSession) -> bool {
-        self.name()
-            .map(|n| n.contains(&session.input_device))
-            .unwrap_or(false)
-            && self.sample_rate_range.0 <= session.sample_rate
-            && session.sample_rate <= self.sample_rate_range.1
-    }
-}
-
 impl State {
     pub fn running(&self) -> bool {
         self.recording_session.is_some()
-    }
-
-    pub fn supported_devices(&self) -> Result<impl Iterator<Item = SupportedDevice>, DeviceError> {
-        let supported_devices = cpal::default_host()
-            .input_devices()?
-            .filter_map(|device| {
-                let supported_configs = device.supported_input_configs().ok()?;
-                let d = Arc::new(device);
-
-                Some(supported_configs.map(move |c| SupportedDevice {
-                    device: d.clone(),
-                    sample_rate_range: (c.min_sample_rate().0, c.max_sample_rate().0),
-                    sample_format: c.sample_format(),
-                    channels: c.channels(),
-                    buffer_size: c.buffer_size().clone(),
-                }))
-            })
-            .flatten();
-        Ok(supported_devices)
-    }
-
-    pub fn recording_device(&self) -> Result<Option<Arc<Device>>, DeviceError> {
-        let Some(ref session) = self.recording_session else {
-            return Ok(None);
-        };
-
-        Ok(self
-            .supported_devices()?
-            .find_map(|d| d.matches_session(session).then_some(d.device)))
     }
 
     pub fn mode(&self) -> Mode {
@@ -170,7 +134,7 @@ pub enum Mode {
     Standard,
 
     #[serde(rename = "clipboard")]
-    Clipboard { use_clipboard: bool, use_llm: bool },
+    Clipboard,
 
     #[default]
     #[serde(rename = "live_typing")]
@@ -184,17 +148,7 @@ impl std::fmt::Display for Mode {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             Self::Standard => write!(f, "standard"),
-            Self::Clipboard {
-                use_clipboard,
-                use_llm,
-            } => {
-                write!(
-                    f,
-                    "clipboard: {}, llm: {}",
-                    if *use_clipboard { "using" } else { "not using" },
-                    if *use_llm { "using" } else { "not using" }
-                )
-            }
+            Self::Clipboard => write!(f, "clipboard"),
             Self::LiveTyping => write!(f, "live_typing"),
             Self::Chat(_) => write!(f, "chat"),
         }

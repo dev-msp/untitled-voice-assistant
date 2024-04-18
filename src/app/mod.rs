@@ -68,19 +68,14 @@ impl Daemon {
                 continue;
             };
 
-            // This handles the state condition where rec must exist.
-            if new_state.running() && rec.is_none() {
-                let device = new_state.recording_device()?.ok_or(anyhow!("No device"))?;
-                rec = Some(controlled_recording(
-                    &device,
-                    sync::ProcessNode::new(|it| it.collect::<Vec<_>>()),
-                ));
-            }
-
             match command {
-                Command::Start(_) => {
-                    assert!(rec.is_some());
+                Command::Start(session) => {
                     assert!(new_state.running());
+
+                    rec = Some(controlled_recording(
+                        session.clone(),
+                        sync::ProcessNode::new(|it| it.collect::<Vec<_>>()),
+                    ));
 
                     rec.as_mut().unwrap().start();
                     let now = SystemTime::now()
