@@ -2,12 +2,14 @@ mod app;
 mod audio;
 mod socket;
 mod sync;
+mod web;
 mod whisper;
 
-use anyhow::anyhow;
-
+use app::{command::Command, response::Response};
 use clap::Parser;
 use cpal::traits::{DeviceTrait, HostTrait};
+use crossbeam::channel::{Receiver, Sender};
+use tokio::task::spawn_blocking;
 use whisper_rs::install_whisper_log_trampoline;
 
 use crate::app::Daemon;
@@ -34,13 +36,12 @@ struct DaemonInit {
     #[clap(short, long, value_parser = whisper::parse_strategy)]
     strategy: Option<whisper::StrategyOpt>,
 
-    /// Pattern to match against device name
-    #[clap(long)]
-    device_name: Option<String>,
-
     /// Socket path
     #[clap(long)]
     socket_path: String,
+
+    #[clap(long)]
+    serve: bool,
 }
 
 impl DaemonInit {
@@ -49,18 +50,39 @@ impl DaemonInit {
     }
 }
 
-fn device_matching_name(name: &str) -> Result<cpal::Device, anyhow::Error> {
-    let host = cpal::default_host();
+fn run_daemon(
+    app: DaemonInit,
+    commands: Receiver<Command>,
+    responses: Sender<Response>,
+) -> Result<bool, anyhow::Error> {
+    log::info!("Launching with settings: {:?}", app);
 
-    let device = host
-        .input_devices()?
-        .find(|d| d.name().map(|n| n.contains(name)).unwrap_or(false))
-        .ok_or(anyhow!("no input device available"))?;
+    let mut daemon = Daemon::new(app);
 
-    Ok(device)
+    daemon.run_loop(commands, responses)
 }
 
-fn main() -> Result<(), anyhow::Error> {
+async fn run_web_server(app: DaemonInit) -> std::io::Result<bool> {
+    let (commands_out, commands_in) = crossbeam::channel::bounded(1);
+    let (responses_out, responses_in) = crossbeam::channel::bounded(1);
+    let handle = spawn_blocking(|| run_daemon(app, commands_in, responses_out));
+
+    let server = web::run(commands_out, responses_in);
+
+    tokio::select! {
+        app_finished = handle => {
+            Ok(app_finished.expect("failed to join app thread").expect("app failed"))
+        },
+        outcome = server => {
+            outcome.expect("server failed");
+            log::info!("server finished");
+            Ok(false)
+        },
+    }
+}
+
+#[actix_web::main]
+async fn main() -> Result<(), anyhow::Error> {
     install_whisper_log_trampoline();
 
     env_logger::init();
@@ -89,26 +111,19 @@ fn main() -> Result<(), anyhow::Error> {
                     buf_ceil
                 );
             }
-            return Ok(());
+            Ok(())
         }
         Commands::RunDaemon(app) => {
-            log::info!("Launching with settings: {:?}", app);
-
-            let device = match &app.device_name {
-                Some(n) => device_matching_name(n)?,
-                None => cpal::default_host()
-                    .default_input_device()
-                    .ok_or(anyhow!("no input device available"))?,
+            let _ = if app.serve {
+                run_web_server(app).await?
+            } else {
+                let (rcmds, resps, listener) =
+                    socket::receive_instructions(app.socket_path.clone())?;
+                let outcome = run_daemon(app, rcmds, resps)?;
+                listener.join().expect("failed to join listener thread")?;
+                outcome
             };
-
-            log::info!("Found device: {:?}", device.name()?);
-
-            let mut daemon = Daemon::new(app, Some(device));
-            let should_reset = daemon.run_loop()?;
-            if should_reset {
-                std::process::exit(1);
-            }
+            std::process::exit(1);
         }
     }
-    Ok(())
 }

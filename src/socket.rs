@@ -13,7 +13,7 @@ use crossbeam::{
     atomic::AtomicCell,
     channel::{unbounded, Receiver, SendError, Sender},
 };
-use serde_json::Value;
+use serde::{de::DeserializeOwned, Serialize};
 
 struct DebugBufReader<R: BufRead>(R);
 
@@ -31,8 +31,8 @@ enum ReadError {
     #[error("parse: {0}")]
     Parse(#[from] serde_json::Error),
 
-    #[error("channel: {0}")]
-    Channel(#[from] SendError<Value>),
+    #[error("channel send failed")]
+    Send,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -40,6 +40,8 @@ enum ReadError {
 enum WriteError {
     #[error("io: {0}")]
     Io(#[from] io::Error),
+    #[error("json: {0}")]
+    Json(#[from] serde_json::Error),
 }
 
 impl Error {
@@ -78,17 +80,18 @@ impl<R: BufRead> BufRead for DebugBufReader<R> {
     }
 }
 
-fn write_thread(
+fn write_thread<T: Send + Serialize + 'static>(
     mut wstream: UnixStream,
-    r: &Receiver<Value>,
+    r: &Receiver<T>,
     is_done: Arc<AtomicCell<bool>>,
 ) -> thread::JoinHandle<Result<(), WriteError>> {
     let r = r.clone();
     thread::spawn(move || {
         while !is_done.load() {
             if let Ok(line) = r.recv() {
+                let line = serde_json::to_string(&line)?;
                 log::trace!("Writing line: {}", line);
-                wstream.write_all(format!("{line}\n").as_bytes())?;
+                wstream.write_all(format!("{},\n", line).as_bytes())?;
                 log::trace!("Wrote line");
             } else {
                 log::error!("Failed to read line");
@@ -99,9 +102,9 @@ fn write_thread(
     })
 }
 
-fn read_thread(
+fn read_thread<T: Send + Sync + DeserializeOwned + 'static>(
     stream: UnixStream,
-    s: Sender<Value>,
+    s: Sender<T>,
     is_done: Arc<AtomicCell<bool>>,
 ) -> thread::JoinHandle<Result<(), ReadError>> {
     thread::spawn(move || {
@@ -118,8 +121,7 @@ fn read_thread(
             }
         });
         for line in it {
-            log::trace!("Sending line: {}", line);
-            s.send(line)?;
+            s.send(line).map_err(|_: SendError<T>| ReadError::Send)?;
         }
 
         is_done.store(true);
@@ -171,11 +173,15 @@ where
 }
 
 #[tracing::instrument(skip_all)]
-fn handle_stream(
+fn handle_stream<I, O>(
     stream: UnixStream,
-    cmd_send: Sender<Value>,
-    res_recv: &Receiver<Value>,
-) -> Result<(), Error> {
+    cmd_send: Sender<I>,
+    res_recv: &Receiver<O>,
+) -> Result<(), Error>
+where
+    I: Send + Sync + DeserializeOwned + 'static,
+    O: Send + Serialize + 'static,
+{
     let wstream = stream.try_clone()?;
     log::trace!("Cloned stream");
 
@@ -194,12 +200,18 @@ fn handle_stream(
 type Handle = std::thread::JoinHandle<Result<(), anyhow::Error>>;
 
 // Triple of channel pair (commands), sender (responses), and handle for the socket thread
-type InstructionHandle = (Receiver<Value>, Sender<Value>, Handle);
+type InstructionHandle<I, O> = (Receiver<I>, Sender<O>, Handle);
 
-pub fn receive_instructions(socket_path: &str) -> Result<InstructionHandle, anyhow::Error> {
-    match std::fs::metadata(socket_path) {
+pub fn receive_instructions<I, O>(
+    socket_path: String,
+) -> Result<InstructionHandle<I, O>, anyhow::Error>
+where
+    I: Send + Sync + DeserializeOwned + 'static,
+    O: Send + Serialize + 'static,
+{
+    match std::fs::metadata(&socket_path) {
         Ok(metadata) if metadata.file_type().is_socket() => {
-            std::fs::remove_file(socket_path)?;
+            std::fs::remove_file(&socket_path)?;
         }
         Ok(_) => return Err(anyhow!("socket path exists and is not a Unix socket")),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -207,12 +219,11 @@ pub fn receive_instructions(socket_path: &str) -> Result<InstructionHandle, anyh
     }
     let (csend, crecv) = unbounded();
     let (rsend, rrecv) = unbounded();
-    let sock_path = socket_path.to_string();
     Ok((
         crecv,
         rsend,
         std::thread::spawn(move || {
-            let listener = UnixListener::bind(sock_path).expect("Failed to bind to socket");
+            let listener = UnixListener::bind(socket_path).expect("Failed to bind to socket");
 
             let mut incoming = listener.incoming();
             while let Some(rstream) = incoming.next().transpose()? {
