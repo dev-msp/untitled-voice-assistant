@@ -38,10 +38,10 @@ struct DaemonInit {
 
     /// Socket path
     #[clap(long)]
-    socket_path: String,
+    socket_path: Option<String>,
 
-    #[clap(long)]
-    serve: bool,
+    #[clap(long, value_parser = web::parse_addr_option)]
+    serve: Option<(String, u16)>,
 }
 
 impl DaemonInit {
@@ -62,12 +62,12 @@ fn run_daemon(
     daemon.run_loop(commands, responses)
 }
 
-async fn run_web_server(app: DaemonInit) -> std::io::Result<bool> {
+async fn run_web_server(addr: (String, u16), app: DaemonInit) -> std::io::Result<bool> {
     let (commands_out, commands_in) = crossbeam::channel::bounded(1);
     let (responses_out, responses_in) = crossbeam::channel::bounded(1);
     let handle = spawn_blocking(|| run_daemon(app, commands_in, responses_out));
 
-    let server = web::run(commands_out, responses_in);
+    let server = web::run(addr, commands_out, responses_in);
 
     tokio::select! {
         app_finished = handle => {
@@ -114,16 +114,25 @@ async fn main() -> Result<(), anyhow::Error> {
             Ok(())
         }
         Commands::RunDaemon(app) => {
-            let _ = if app.serve {
-                run_web_server(app).await?
-            } else {
-                let (rcmds, resps, listener) =
-                    socket::receive_instructions(app.socket_path.clone())?;
-                let outcome = run_daemon(app, rcmds, resps)?;
-                listener.join().expect("failed to join listener thread")?;
-                outcome
+            let should_reset = match (&app.socket_path, &app.serve) {
+                (None, Some(a)) => run_web_server(a.clone(), app).await?,
+                (Some(p), None) => {
+                    let (rcmds, resps, listener) = socket::receive_instructions(p.clone())?;
+                    let outcome = run_daemon(app, rcmds, resps)?;
+                    listener.join().expect("failed to join listener thread")?;
+                    outcome
+                }
+                _ => {
+                    log::error!(
+                        "Invalid arguments: socket path and serve flag cannot be used together but at least one must be provided"
+                    );
+                    true
+                }
             };
-            std::process::exit(1);
+            if should_reset {
+                std::process::exit(1);
+            }
+            Ok(())
         }
     }
 }

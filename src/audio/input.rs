@@ -216,9 +216,11 @@ where
             c
         })
         .find_map(|c| {
-            if c.min_sample_rate() > SampleRate(session.sample_rate())
-                || c.max_sample_rate() < SampleRate(session.sample_rate())
-            {
+            let sample_rate = session
+                .sample_rate()
+                .map(SampleRate)
+                .unwrap_or_else(|| c.min_sample_rate().max(SampleRate(16000)));
+            if c.min_sample_rate() > sample_rate || c.max_sample_rate() < sample_rate {
                 None
             } else {
                 let min_sample_rate = c.min_sample_rate();

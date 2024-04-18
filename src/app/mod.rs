@@ -151,7 +151,9 @@ impl Daemon {
         tx_worker.join().unwrap()?;
 
         // remove socket
-        std::fs::remove_file(&self.config.socket_path)?;
+        if let Some(ref p) = self.config.socket_path {
+            std::fs::remove_file(p)?;
+        }
         Ok(false)
     }
 }
