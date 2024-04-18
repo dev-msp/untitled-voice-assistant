@@ -2,14 +2,14 @@ use crossbeam::channel::Receiver;
 
 use super::{
     response::Response,
-    state::{Mode, State},
+    state::{Mode, RecordingSession, State},
 };
 
 #[derive(Debug, Clone, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum Command {
     #[serde(rename = "start")]
-    Start,
+    Start(RecordingSession),
 
     #[serde(rename = "stop")]
     Stop, // need timestamp?

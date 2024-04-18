@@ -4,7 +4,7 @@ use super::state::{Chat, Mode};
 #[serde(tag = "type", content = "data")]
 pub enum Response {
     #[serde(rename = "ack")]
-    Ack,
+    Ack(u128),
 
     #[serde(rename = "nil")]
     Nil,
@@ -22,6 +22,16 @@ pub enum Response {
     Transcription { content: Option<String>, mode: Mode },
 }
 
+impl Response {
+    pub fn ack() -> Self {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        Self::Ack(now)
+    }
+}
+
 impl From<sttx::Timing> for Response {
     fn from(t: sttx::Timing) -> Self {
         Self::Transcription {
@@ -34,7 +44,7 @@ impl From<sttx::Timing> for Response {
 impl std::fmt::Display for Response {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            Self::Ack => write!(f, "ACK"),
+            Self::Ack(n) => write!(f, "ACK {}", n),
             Self::Nil => write!(f, "NIL"),
             Self::Error(s) => write!(f, "ERROR {}", s),
             Self::Exit(code) => write!(f, "EXIT {}", code),

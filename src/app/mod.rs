@@ -2,8 +2,9 @@ pub mod command;
 pub mod response;
 pub mod state;
 
+use std::time::SystemTime;
+
 use anyhow::anyhow;
-use cpal::Device;
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use sttx::IteratorExt;
 
@@ -16,7 +17,6 @@ use self::response::Response;
 
 pub struct Daemon {
     config: DaemonInit,
-    input_device: Option<Device>,
     state: state::State,
 }
 
@@ -38,10 +38,9 @@ impl Transcription {
 }
 
 impl Daemon {
-    pub fn new(config: DaemonInit, input_device: Option<Device>) -> Self {
+    pub fn new(config: DaemonInit) -> Self {
         Self {
             config,
-            input_device,
             state: state::State::default(),
         }
     }
@@ -53,10 +52,6 @@ impl Daemon {
         responses: Sender<Response>,
     ) -> Result<bool, anyhow::Error> {
         let model = self.config.model.clone();
-        let device = self
-            .input_device
-            .as_ref()
-            .ok_or_else(|| anyhow!("No input device"))?;
 
         let (to_whisper, from_recordings) = unbounded();
         let (whisper_output, tx_worker) = whisper::transcription_worker(&model, from_recordings)?;
@@ -75,19 +70,24 @@ impl Daemon {
 
             // This handles the state condition where rec must exist.
             if new_state.running() && rec.is_none() {
+                let device = new_state.recording_device()?.ok_or(anyhow!("No device"))?;
                 rec = Some(controlled_recording(
-                    device,
+                    &device,
                     sync::ProcessNode::new(|it| it.collect::<Vec<_>>()),
                 ));
             }
 
             match command {
-                Command::Start => {
+                Command::Start(_) => {
                     assert!(rec.is_some());
                     assert!(new_state.running());
 
                     rec.as_mut().unwrap().start();
-                    responses.send(Response::Ack)?;
+                    let now = SystemTime::now()
+                        .duration_since(SystemTime::UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis();
+                    responses.send(Response::Ack(now))?;
                     log::debug!("Successfully sent ACK");
                 }
 
@@ -140,7 +140,7 @@ impl Daemon {
                 }
                 c @ Command::Mode(_) => {
                     assert!(!new_state.running());
-                    responses.send(c.as_response().unwrap_or(Response::Ack))?;
+                    responses.send(c.as_response().unwrap_or_else(Response::ack))?;
                 }
                 Command::Respond(response) => {
                     log::info!("Responding with: {:?}", response);
