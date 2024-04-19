@@ -33,8 +33,8 @@ struct DaemonInit {
     #[clap(short, long)]
     model: String,
 
-    #[clap(short, long, value_parser = whisper::parse_strategy)]
-    strategy: Option<whisper::StrategyOpt>,
+    #[clap(short, long, value_parser = whisper::transcription::parse_strategy)]
+    strategy: Option<whisper::transcription::StrategyOpt>,
 
     /// Socket path
     #[clap(long)]

@@ -9,8 +9,11 @@ use crossbeam::channel::{unbounded, Receiver, Sender};
 use sttx::IteratorExt;
 
 use crate::audio::input::{controlled_recording, Recording};
-use crate::whisper::TranscriptionJob;
-use crate::{sync, whisper, DaemonInit};
+use crate::{
+    sync,
+    whisper::{self, transcription::Job},
+    DaemonInit,
+};
 
 use self::command::{CmdStream, Command};
 use self::response::Response;
@@ -61,7 +64,6 @@ impl Daemon {
         #[allow(unused_assignments)]
         let mut exit_code = 0_u8;
         let mut rec: Option<Recording<_, Vec<f32>>> = None;
-
         for (ref command, ref new_state) in commands.run_state_machine(&mut self.state) {
             let Some(new_state) = new_state else {
                 responses.send(Response::Nil)?;
@@ -91,10 +93,11 @@ impl Daemon {
                     assert!(!new_state.running());
 
                     let (metadata, audio) = rec.take().unwrap().stop()?;
-                    to_whisper.send(TranscriptionJob::new(
+                    to_whisper.send(Job::new(
                         audio,
                         self.config.strategy(),
                         metadata.sample_rate.0,
+                        new_state.prompt(),
                     ))?;
                     let now = std::time::Instant::now();
 

@@ -13,13 +13,19 @@ use super::command::Command;
 pub struct RecordingSession {
     input_device: Option<String>,
     sample_rate: Option<u32>,
+    prompt: Option<String>,
 }
 
 impl RecordingSession {
-    pub fn new(input_device: Option<String>, sample_rate: Option<u32>) -> Self {
+    pub fn new(
+        input_device: Option<String>,
+        sample_rate: Option<u32>,
+        prompt: Option<String>,
+    ) -> Self {
         Self {
             input_device,
             sample_rate,
+            prompt,
         }
     }
 
@@ -71,11 +77,23 @@ impl RecordingSession {
             }
         }))
     }
+
+    pub fn prompt(&self) -> Option<&str> {
+        self.prompt.as_deref()
+    }
+}
+
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
+pub enum Audio {
+    #[default]
+    Idle,
+    Started(RecordingSession),
+    Stopped(RecordingSession),
 }
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct State {
-    recording_session: Option<RecordingSession>,
+    audio: Audio,
     mode: Mode,
 }
 
@@ -123,28 +141,37 @@ impl Serialize for SupportedDevice {
 
 impl State {
     pub fn running(&self) -> bool {
-        self.recording_session.is_some()
+        matches!(self.audio, Audio::Started(_))
     }
 
     pub fn mode(&self) -> Mode {
         self.mode.clone()
     }
 
+    pub fn prompt(&self) -> Option<String> {
+        match &self.audio {
+            Audio::Started(s) | Audio::Stopped(s) => s.prompt().map(str::to_owned),
+            Audio::Idle => None,
+        }
+    }
+
     fn start(&mut self, session: RecordingSession) -> bool {
-        if self.running() {
-            false
-        } else {
-            self.recording_session = Some(session);
-            true
+        match self.audio {
+            Audio::Idle | Audio::Stopped(_) => {
+                self.audio = Audio::Started(session);
+                true
+            }
+            Audio::Started(_) => false,
         }
     }
 
     fn stop(&mut self) -> bool {
-        if self.running() {
-            self.recording_session = None;
-            true
-        } else {
-            false
+        match &self.audio {
+            Audio::Started(s) => {
+                self.audio = Audio::Stopped(s.clone());
+                true
+            }
+            _ => false,
         }
     }
 
