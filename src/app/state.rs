@@ -8,7 +8,7 @@ use super::command::Command;
 #[derive(Debug, Default, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 pub struct RecordingSession {
     input_device: String,
-    sample_rate: u32,
+    sample_rate: Option<u32>,
 }
 
 impl RecordingSession {
@@ -16,7 +16,7 @@ impl RecordingSession {
         &self.input_device
     }
 
-    pub fn sample_rate(&self) -> u32 {
+    pub fn sample_rate(&self) -> Option<u32> {
         self.sample_rate
     }
 }

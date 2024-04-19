@@ -5,6 +5,7 @@ use actix_web::{
     web::{self, Data},
     App, HttpRequest, HttpResponse, HttpServer, Responder,
 };
+use anyhow::anyhow;
 use crossbeam::channel::{Receiver, Sender};
 use serde::Serialize;
 
@@ -67,7 +68,11 @@ async fn set_mode(app: AppChannel, mode: web::Json<Mode>) -> impl Responder {
     ApiResponder { content: response }
 }
 
-pub async fn run(commands: Sender<Command>, responses: Receiver<Response>) -> std::io::Result<()> {
+pub async fn run<A: std::net::ToSocketAddrs>(
+    addr: A,
+    commands: Sender<Command>,
+    responses: Receiver<Response>,
+) -> std::io::Result<()> {
     let server = HttpServer::new(move || {
         let voice = web::scope("/voice")
             .service(start)
@@ -77,9 +82,16 @@ pub async fn run(commands: Sender<Command>, responses: Receiver<Response>) -> st
 
         App::new().wrap(Logger::default()).service(voice)
     })
-    .bind(("localhost", 8088))?;
+    .bind(addr)?;
 
     let handle = server.run().await;
     log::warn!("Server finished?");
     handle
+}
+
+pub fn parse_addr_option(s: &str) -> Result<(String, u16), anyhow::Error> {
+    let mut parts = s.split(':');
+    let host = parts.next().ok_or(anyhow!("no host provided"))?;
+    let port = parts.next().ok_or(anyhow!("no port provided"))?.parse()?;
+    Ok((host.to_string(), port))
 }
