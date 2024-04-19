@@ -7,7 +7,6 @@ mod whisper;
 
 use app::{command::Command, response::Response};
 use clap::Parser;
-use cpal::traits::{DeviceTrait, HostTrait};
 use crossbeam::channel::{Receiver, Sender};
 use tokio::task::spawn_blocking;
 use whisper_rs::install_whisper_log_trampoline;
@@ -88,31 +87,7 @@ async fn main() -> Result<(), anyhow::Error> {
     env_logger::init();
 
     match App::parse().command {
-        Commands::ListChannels => {
-            let host = cpal::default_host();
-            for (device_name, config) in host.input_devices()?.flat_map(|d| {
-                let name = d.name().expect("failed to get device name");
-                d.supported_input_configs()
-                    .unwrap()
-                    .map(move |c| (name.clone(), c))
-            }) {
-                let (buf_floor, buf_ceil) = match config.buffer_size() {
-                    cpal::SupportedBufferSize::Range { min, max } => (min, max),
-                    cpal::SupportedBufferSize::Unknown => unimplemented!(),
-                };
-                println!(
-                    "{}: sample_rate:{}-{}, sample_format:{:?}, channels:{}, buffer_size: {}-{}",
-                    device_name,
-                    config.min_sample_rate().0,
-                    config.max_sample_rate().0,
-                    config.sample_format(),
-                    config.channels(),
-                    buf_floor,
-                    buf_ceil
-                );
-            }
-            Ok(())
-        }
+        Commands::ListChannels => audio::input::list_channels(),
         Commands::RunDaemon(app) => {
             let should_reset = match (&app.socket_path, &app.serve) {
                 (None, Some(a)) => run_web_server(a.clone(), app).await?,
