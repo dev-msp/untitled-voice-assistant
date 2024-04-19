@@ -235,30 +235,57 @@ where
 
     let cfg: cpal::StreamConfig = supported_config.clone().into();
     let cfg_inner = cfg.clone();
-    let resampler = super::process::Processor::<f32, S>::new(chan.clone(), cfg_inner.clone(), 512)
-        .expect("failed to create resampler");
+    if cfg.channels == 1 {
+        let resampler =
+            super::process::Processor::<f32, S, 1>::new(chan.clone(), cfg_inner.clone(), 512)
+                .expect("failed to create resampler");
 
-    let resampler = Arc::new(Mutex::new(resampler));
-    {
-        let resampler_send = resampler.clone();
-        let stream = device.build_input_stream(
-            &cfg,
-            move |data, _| {
-                resampler_send
-                    .lock()
-                    .expect("failed to lock resampler")
-                    .write_input_data(data)
-                    .expect("failed to write data");
-            },
-            move |err| log::trace!("an error occurred on stream: {}", err),
-        )?;
-        stream.play()?;
-        controller.recording();
+        let resampler = Arc::new(Mutex::new(resampler));
+        {
+            let resampler_send = resampler.clone();
+            let stream = device.build_input_stream(
+                &cfg,
+                move |data, _| {
+                    resampler_send
+                        .lock()
+                        .expect("failed to lock resampler")
+                        .write_input_data(data)
+                        .expect("failed to write data");
+                },
+                move |err| log::trace!("an error occurred on stream: {}", err),
+            )?;
+            stream.play()?;
+            controller.recording();
 
-        controller.wait_for(RecordState::Stopped);
+            controller.wait_for(RecordState::Stopped);
+        }
+    } else if cfg.channels == 2 {
+        let resampler =
+            super::process::Processor::<f32, S, 2>::new(chan.clone(), cfg_inner.clone(), 512)
+                .expect("failed to create resampler");
+
+        let resampler = Arc::new(Mutex::new(resampler));
+        {
+            let resampler_send = resampler.clone();
+            let stream = device.build_input_stream(
+                &cfg,
+                move |data, _| {
+                    resampler_send
+                        .lock()
+                        .expect("failed to lock resampler")
+                        .write_input_data(data)
+                        .expect("failed to write data");
+                },
+                move |err| log::trace!("an error occurred on stream: {}", err),
+            )?;
+            stream.play()?;
+            controller.recording();
+
+            controller.wait_for(RecordState::Stopped);
+        }
+    } else {
+        panic!("unsupported channel count");
     }
-    let mut resampler = resampler.lock().expect("failed to lock resampler");
-    resampler.flush_to_sink()?;
     Ok(cfg)
 }
 
