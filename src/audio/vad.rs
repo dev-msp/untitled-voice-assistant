@@ -1,5 +1,5 @@
 use std::{
-    iter::{repeat, Chain, Cloned, Repeat, Take},
+    iter::{repeat, Chain, Copied, Repeat, Take},
     slice::Iter,
     time::Duration,
 };
@@ -16,28 +16,28 @@ pub enum SampleSize {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum VadMode {
+pub enum Mode {
     Quality = 0,
     LowBitrate = 1,
     Aggressive = 2,
     VeryAggressive = 3,
 }
 
-impl From<VadMode> for BadVadMode {
-    fn from(value: VadMode) -> Self {
+impl From<Mode> for BadVadMode {
+    fn from(value: Mode) -> Self {
         match value {
-            VadMode::Quality => BadVadMode::Quality,
-            VadMode::LowBitrate => BadVadMode::LowBitrate,
-            VadMode::Aggressive => BadVadMode::Aggressive,
-            VadMode::VeryAggressive => BadVadMode::VeryAggressive,
+            Mode::Quality => BadVadMode::Quality,
+            Mode::LowBitrate => BadVadMode::LowBitrate,
+            Mode::Aggressive => BadVadMode::Aggressive,
+            Mode::VeryAggressive => BadVadMode::VeryAggressive,
         }
     }
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct Config {
-    mode: VadMode,
-    sample_rate: i32,
+    mode: Mode,
+    sample_rate: u16,
 
     sample_size: SampleSize,
     resolution: Duration,
@@ -46,7 +46,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            mode: VadMode::Quality,
+            mode: Mode::Quality,
             sample_rate: 16000,
 
             sample_size: SampleSize::Medium,
@@ -66,7 +66,9 @@ impl TryFrom<&Config> for Vad {
 
     fn try_from(cfg: &Config) -> Result<Self, Self::Error> {
         Ok(Vad::new_with_rate_and_mode(
-            cfg.sample_rate.try_into().or(Err(Error::BadSampleRate))?,
+            i32::from(cfg.sample_rate)
+                .try_into()
+                .or(Err(Error::BadSampleRate))?,
             cfg.mode.into(),
         ))
     }
@@ -99,7 +101,8 @@ impl Buffer<'_> {
 
 impl Config {
     pub fn buffer_size(&self) -> usize {
-        (self.sample_size as u32 * self.sample_rate as u32 / 1000) as usize
+        assert!(self.sample_rate > 0);
+        (self.sample_size as u16 * self.sample_rate / 1000) as usize
     }
 
     pub fn buffer_from<'a>(&self, index: usize, data: &'a [i16]) -> Buffer<'a> {
@@ -121,11 +124,11 @@ impl<'a> AsRef<[i16]> for Buffer<'a> {
 
 impl<'a> IntoIterator for Buffer<'a> {
     type Item = i16;
-    type IntoIter = Chain<Cloned<Iter<'a, i16>>, Take<Repeat<i16>>>;
+    type IntoIter = Chain<Copied<Iter<'a, i16>>, Take<Repeat<i16>>>;
 
     fn into_iter(self) -> Self::IntoIter {
         let fill = self.size() - self.data.len();
-        self.data.iter().cloned().chain(repeat(0).take(fill))
+        self.data.iter().copied().chain(repeat(0).take(fill))
     }
 }
 
@@ -142,7 +145,7 @@ impl Config {
 
         Ok(output?
             .chunks(self.resolution.as_millis() as usize / self.sample_size as usize)
-            .map(|chk| chk.iter().cloned().filter(|x| *x).count())
+            .map(|chk| chk.iter().copied().filter(|x| *x).count())
             .collect::<Vec<_>>())
     }
 }

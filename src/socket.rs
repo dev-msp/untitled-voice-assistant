@@ -91,7 +91,7 @@ fn write_thread<T: Send + Serialize + 'static>(
             if let Ok(line) = r.recv() {
                 let line = serde_json::to_string(&line)?;
                 log::trace!("Writing line: {}", line);
-                wstream.write_all(format!("{},\n", line).as_bytes())?;
+                wstream.write_all(format!("{line},\n").as_bytes())?;
                 log::trace!("Wrote line");
             } else {
                 log::error!("Failed to read line");
@@ -109,15 +109,14 @@ fn read_thread<T: Send + Sync + DeserializeOwned + 'static>(
 ) -> thread::JoinHandle<Result<(), ReadError>> {
     thread::spawn(move || {
         let reader = DebugBufReader(BufReader::new(stream));
-        let it = reader.lines().flat_map(|l| {
+        let it = reader.lines().filter_map(|l| {
             log::trace!("Read line: {:?}", l);
             let l = l.expect("Failed to read line");
-            match serde_json::from_str(&l) {
-                Ok(v) => Some(v),
-                Err(_) => {
-                    log::warn!("Failed to parse line: {:?}", l);
-                    None
-                }
+            if let Ok(v) = serde_json::from_str(&l) {
+                Some(v)
+            } else {
+                log::warn!("Failed to parse line: {:?}", l);
+                None
             }
         });
         for line in it {
@@ -138,9 +137,10 @@ impl<S: ToString> ThreadName<S> {
     }
 
     fn realize(self) -> String {
-        self.0
-            .map(|n| format!("thread named {}", n.to_string()))
-            .unwrap_or_else(|| "thread".to_string())
+        self.0.map_or_else(
+            || "thread".to_string(),
+            |n| format!("thread named {}", n.to_string()),
+        )
     }
 }
 
@@ -162,8 +162,7 @@ where
         Err(e) if e.recoverable() => {
             log::warn!(
                 "Recoverable failure in {}: {:?}",
-                name.map(|n| format!("{} thread", n))
-                    .unwrap_or_else(|| "thread".to_string()),
+                name.map_or_else(|| "thread".to_string(), |n| format!("{n} thread")),
                 e
             );
             Err(e)
@@ -217,20 +216,20 @@ where
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(anyhow!(e).context("unhandled error attempting to access socket")),
     }
-    let (csend, crecv) = unbounded();
-    let (rsend, rrecv) = unbounded();
+    let (commands_out, commands_in) = unbounded();
+    let (responses_out, responses_in) = unbounded();
     Ok((
-        crecv,
-        rsend,
+        commands_in,
+        responses_out,
         std::thread::spawn(move || {
             let listener = UnixListener::bind(socket_path).expect("Failed to bind to socket");
 
             let mut incoming = listener.incoming();
             while let Some(rstream) = incoming.next().transpose()? {
-                match handle_stream(rstream, csend.clone(), &rrecv) {
+                match handle_stream(rstream, commands_out.clone(), &responses_in) {
                     Err(e) if e.recoverable() => Ok(()),
                     x => x,
-                }?
+                }?;
             }
             log::warn!("Listener done providing streams");
             Ok(())

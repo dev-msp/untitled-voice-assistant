@@ -48,15 +48,13 @@ impl Whisper {
 
                 let token_segs: Vec<Timing> = {
                     let mut out = Vec::new();
-                    let n_tokens = state.full_n_tokens(n)? as i64;
-
-                    for i in 0..n_tokens {
-                        let text = state.full_get_token_text(n, i as i32)?;
+                    for i in 0..state.full_n_tokens(n)? {
+                        let text = state.full_get_token_text(n, i)?;
                         if text.starts_with("[_") {
                             continue;
                         }
 
-                        let data = state.full_get_token_data(n, i as i32)?;
+                        let data = state.full_get_token_data(n, i)?;
 
                         // we're evenly spacing t0 and t1 for each token in the segment
                         let t0 = 10 * data.t0;
@@ -97,11 +95,11 @@ type WorkerHandle = (
 pub struct TranscriptionJob {
     audio: Vec<f32>,
     strategy: whisper_rs::SamplingStrategy,
-    sample_rate: i32,
+    sample_rate: u32,
 }
 
 impl TranscriptionJob {
-    pub fn new(audio: Vec<f32>, strategy: whisper_rs::SamplingStrategy, sample_rate: i32) -> Self {
+    pub fn new(audio: Vec<f32>, strategy: whisper_rs::SamplingStrategy, sample_rate: u32) -> Self {
         Self {
             audio,
             strategy,
@@ -109,8 +107,14 @@ impl TranscriptionJob {
         }
     }
 
+    #[allow(clippy::cast_sign_loss)]
+    #[allow(clippy::cast_precision_loss)]
     pub fn duration(&self) -> Duration {
-        Duration::from_secs_f32(self.audio.len() as f32 / self.sample_rate as f32)
+        assert!(self.sample_rate > 0);
+        let secs_int = self.audio.len() / self.sample_rate as usize;
+        let rem = self.audio.len() % self.sample_rate as usize;
+        Duration::from_secs(secs_int as u64)
+            + Duration::from_secs_f32(rem as f32 / self.sample_rate as f32)
     }
 }
 
@@ -124,7 +128,7 @@ pub fn transcription_worker(
     Ok((
         recv,
         std::thread::spawn(move || {
-            for job in jobs.iter() {
+            for job in &jobs {
                 log::debug!("Transcribing audio with duration: {:?}", job.duration());
                 let results = whisper
                     .transcribe_audio(job)
@@ -172,7 +176,7 @@ pub fn parse_strategy(s: &str) -> Result<StrategyOpt, anyhow::Error> {
         parts
             .next()
             .ok_or(anyhow!("strategy must be of the form 'qkind' or 'kind:n'"))?,
-        parts.next().map(|s| s.parse()).transpose()?,
+        parts.next().map(str::parse).transpose()?,
     );
     Ok(match kind {
         "greedy" => {
@@ -187,7 +191,7 @@ pub fn parse_strategy(s: &str) -> Result<StrategyOpt, anyhow::Error> {
             if n < 1 {
                 return Err(anyhow!("beam_size must be at least 1"));
             }
-            let patience = parts.next().map(|s| s.parse()).transpose()?.unwrap_or(0.0);
+            let patience = parts.next().map(str::parse).transpose()?.unwrap_or(0.0);
             StrategyOpt::Beam {
                 beam_size: n,
                 patience,
@@ -235,19 +239,19 @@ mod test {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "best_of must be at least 1")]
     fn test_bad_beam_parse() {
         parse_strategy("beam:0").unwrap();
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "best_of must be at least 1")]
     fn test_bad_greedy_parse() {
         parse_strategy("greedy:0").unwrap();
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "invalid strategy")]
     fn test_bad_parse() {
         parse_strategy("berm").unwrap();
     }

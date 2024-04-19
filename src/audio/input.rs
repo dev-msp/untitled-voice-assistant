@@ -1,6 +1,5 @@
 use std::{
     fmt::{Debug, Display},
-    ops::Deref,
     sync::{Arc, Condvar, Mutex},
     thread,
 };
@@ -27,17 +26,17 @@ impl<T: Debug + Clone + PartialEq> Notifier<T> {
         cvar.notify_one();
     }
 
-    pub fn wait_until(&self, value: T) {
+    pub fn wait_until(&self, value: &T) {
         let (lock, cvar) = &*self.0;
         log::trace!("Trying to lock (wait_until)");
         let mut state = lock.lock().unwrap();
         log::trace!("Locked (wait_until)");
         log::trace!("Waiting for value: {:?}", value);
-        while *state != value {
+        while *state != *value {
             state = cvar.wait(state).unwrap();
-            log::trace!("got value: {:?}", state.deref());
-            if *state != value {
-                log::trace!("Got wrong value ({:?}), continuing", state.deref());
+            log::trace!("got value: {:?}", &*state);
+            if *state != *value {
+                log::trace!("Got wrong value ({:?}), continuing", &*state);
             }
         }
     }
@@ -82,7 +81,7 @@ impl Controller {
     }
 
     pub fn wait_for(&self, state: RecordState) {
-        self.notifier.wait_until(state);
+        self.notifier.wait_until(&state);
     }
 }
 
@@ -216,8 +215,7 @@ where
         .find_map(|c| {
             let sample_rate = session
                 .sample_rate()
-                .map(SampleRate)
-                .unwrap_or_else(|| c.min_sample_rate().max(SampleRate(16000)));
+                .map_or_else(|| c.min_sample_rate().max(SampleRate(16000)), SampleRate);
             if c.min_sample_rate() > sample_rate || c.max_sample_rate() < sample_rate {
                 None
             } else {
@@ -237,8 +235,7 @@ where
     let cfg_inner = cfg.clone();
     if cfg.channels == 1 {
         let resampler =
-            super::process::Processor::<f32, S, 1>::new(chan.clone(), cfg_inner.clone(), 512)
-                .expect("failed to create resampler");
+            super::process::Processor::<f32, S, 1>::new(chan.clone(), cfg_inner.clone(), 512);
 
         let resampler = Arc::new(Mutex::new(resampler));
         {
@@ -261,8 +258,7 @@ where
         }
     } else if cfg.channels == 2 {
         let resampler =
-            super::process::Processor::<f32, S, 2>::new(chan.clone(), cfg_inner.clone(), 512)
-                .expect("failed to create resampler");
+            super::process::Processor::<f32, S, 2>::new(chan.clone(), cfg_inner.clone(), 512);
 
         let resampler = Arc::new(Mutex::new(resampler));
         {

@@ -109,20 +109,14 @@ impl State {
         match cmd {
             Command::Start(session) => self.start(session.clone()),
             Command::Stop => self.stop(),
-            Command::Mode(mode) => {
-                if !self.running() {
-                    self.change_mode(mode.clone())
-                } else {
-                    false
-                }
-            }
+            Command::Mode(mode) if !self.running() => self.change_mode(mode.clone()),
+            Command::Mode(_) => false,
             // Nothing changes about the state when we send these commands, but we still need to
             // return true so the event loop is triggered.
             //
             // TODO: I should consider making the event loop not sort of dependent on changes in
             // the state and find some other way to represent that.
-            Command::Reset => true,
-            Command::Respond(_) => true,
+            Command::Reset | Command::Respond(_) => true,
         }
     }
 }

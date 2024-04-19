@@ -1,3 +1,4 @@
+#![deny(clippy::pedantic)]
 mod app;
 mod audio;
 mod socket;

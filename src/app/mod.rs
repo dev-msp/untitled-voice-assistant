@@ -94,7 +94,7 @@ impl Daemon {
                     to_whisper.send(TranscriptionJob::new(
                         audio,
                         self.config.strategy(),
-                        metadata.sample_rate.0 as i32,
+                        metadata.sample_rate.0,
                     ))?;
                     let now = std::time::Instant::now();
 

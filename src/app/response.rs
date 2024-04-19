@@ -44,21 +44,21 @@ impl From<sttx::Timing> for Response {
 impl std::fmt::Display for Response {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            Self::Ack(n) => write!(f, "ACK {}", n),
+            Self::Ack(n) => write!(f, "ACK {n}"),
             Self::Nil => write!(f, "NIL"),
-            Self::Error(s) => write!(f, "ERROR {}", s),
-            Self::Exit(code) => write!(f, "EXIT {}", code),
-            Self::NewMode(mode) => write!(f, "NEW_MODE {}", mode),
+            Self::Error(s) => write!(f, "ERROR {s}"),
+            Self::Exit(code) => write!(f, "EXIT {code}"),
+            Self::NewMode(mode) => write!(f, "NEW_MODE {mode}"),
             Self::Transcription {
                 content: Some(s),
                 mode,
             } => match mode {
-                Mode::Standard => write!(f, "TX {}", s),
+                Mode::Standard => write!(f, "TX {s}"),
                 // TODO: use contents?
-                Mode::Clipboard { .. } => write!(f, "TX_CLIP {}", s),
-                Mode::LiveTyping => write!(f, "TX_LIVE {}", s),
-                Mode::Chat(Chat::StartNew(system)) => write!(f, "TX_CHAT {} {}", system, s),
-                Mode::Chat(Chat::Continue) => write!(f, "TX_CHAT {}", s),
+                Mode::Clipboard { .. } => write!(f, "TX_CLIP {s}"),
+                Mode::LiveTyping => write!(f, "TX_LIVE {s}"),
+                Mode::Chat(Chat::StartNew(system)) => write!(f, "TX_CHAT {system} {s}"),
+                Mode::Chat(Chat::Continue) => write!(f, "TX_CHAT {s}"),
             },
             Self::Transcription { content: None, .. } => write!(f, "TX_EMPTY"),
         }

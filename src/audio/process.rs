@@ -19,11 +19,7 @@ where
     S: cpal::Sample + dasp::Sample + Default,
     O: MySample,
 {
-    pub fn new(
-        sink: Sender<O>,
-        config: cpal::StreamConfig,
-        chunk_size_out: usize,
-    ) -> Result<Self, anyhow::Error> {
+    pub fn new(sink: Sender<O>, config: cpal::StreamConfig, chunk_size_out: usize) -> Self {
         let input_rate = config.sample_rate.0 as usize;
         let channels = config.channels as usize;
         log::debug!(
@@ -33,11 +29,11 @@ where
             channels
         );
 
-        Ok(Self {
+        Self {
             config,
             buffer: ring_buffer::Bounded::from([[S::default(); CHANNELS]; 64]),
             sink,
-        })
+        }
     }
 }
 
@@ -45,7 +41,7 @@ impl<S, O> Processor<S, O, 1>
 where
     S: cpal::Sample + dasp::Sample + dasp::Frame + Default,
 {
-    fn interpolator(&self) -> Sinc<[S; 128]> {
+    fn interpolator() -> Sinc<[S; 128]> {
         Sinc::new(ring_buffer::Fixed::from([S::default(); 128]))
     }
 }
@@ -54,7 +50,7 @@ impl<S, O> Processor<S, O, 2>
 where
     S: cpal::Sample + dasp::Sample + Default,
 {
-    fn interpolator(&self) -> Sinc<[[S; 2]; 128]> {
+    fn interpolator() -> Sinc<[[S; 2]; 128]> {
         Sinc::new(ring_buffer::Fixed::from([[S::default(); 2]; 128]))
     }
 }
@@ -63,8 +59,8 @@ impl<O: MySample> Processor<f32, O, 1> {
     pub fn mono_samples<'a>(&'a mut self, input: &'a [f32]) -> impl Iterator<Item = O> + 'a {
         let signal = dasp::signal::from_iter(input.iter().copied());
         let new_signal = signal.from_hz_to_hz(
-            self.interpolator(),
-            self.config.sample_rate.0 as f64,
+            Self::interpolator(),
+            f64::from(self.config.sample_rate.0),
             16_000.0,
         );
         new_signal
@@ -74,7 +70,9 @@ impl<O: MySample> Processor<f32, O, 1> {
 
     pub fn write_input_data(&mut self, input: &[f32]) -> Result<(), anyhow::Error> {
         for sample in self.mono_samples(input).collect_vec() {
-            self.sink.send(sample).unwrap();
+            self.sink
+                .send(sample)
+                .map_err(|_| anyhow::anyhow!("Failed to send sample"))?;
         }
 
         Ok(())
@@ -87,8 +85,8 @@ impl<O: MySample> Processor<f32, O, 2> {
             dasp::signal::from_interleaved_samples_iter::<_, [f32; 2]>(input.iter().copied());
         let new_signal = signal
             .from_hz_to_hz(
-                self.interpolator(),
-                self.config.sample_rate.0 as f64,
+                Self::interpolator(),
+                f64::from(self.config.sample_rate.0),
                 16_000.0,
             )
             .buffered(self.buffer);
@@ -100,7 +98,9 @@ impl<O: MySample> Processor<f32, O, 2> {
 
     pub fn write_input_data(&mut self, input: &[f32]) -> Result<(), anyhow::Error> {
         for sample in self.mono_samples(input).collect_vec() {
-            self.sink.send(sample).unwrap();
+            self.sink
+                .send(sample)
+                .map_err(|_| anyhow::anyhow!("Failed to send sample"))?;
         }
 
         Ok(())
