@@ -1,27 +1,79 @@
 use std::sync::Arc;
 
-use cpal::{traits::DeviceTrait, Device};
-use serde::{ser::SerializeStruct, Serialize, Serializer};
+use cpal::{
+    traits::{DeviceTrait, HostTrait},
+    Device, SupportedStreamConfig,
+};
+use itertools::Itertools;
+use serde::{ser::SerializeStruct, Deserialize, Serialize, Serializer};
 
 use super::command::Command;
 
-#[derive(Debug, Default, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct RecordingSession {
-    input_device: String,
+    input_device: Option<String>,
     sample_rate: Option<u32>,
 }
 
 impl RecordingSession {
-    pub fn device_name(&self) -> &str {
-        &self.input_device
+    pub fn new(input_device: Option<String>, sample_rate: Option<u32>) -> Self {
+        Self {
+            input_device,
+            sample_rate,
+        }
+    }
+
+    pub fn device_name(&self) -> Option<&str> {
+        self.input_device.as_deref()
     }
 
     pub fn sample_rate(&self) -> Option<u32> {
         self.sample_rate
     }
+
+    pub fn supported_configs(
+        &self,
+    ) -> Result<impl Iterator<Item = (Arc<Device>, SupportedStreamConfig)> + '_, anyhow::Error>
+    {
+        let devices = cpal::default_host()
+            .input_devices()?
+            .filter_map(|x| {
+                let name = x.name().ok()?;
+                let Some(pat) = self.device_name() else {
+                    return Some(x);
+                };
+                name.contains(pat).then_some(x)
+            })
+            .map(Arc::new)
+            .collect_vec();
+
+        let device_config_pairs = devices
+            .into_iter()
+            .map(|d| match d.supported_input_configs() {
+                Ok(cfgs) => Ok(cfgs.map(move |cfg| (d.clone(), cfg))),
+                Err(e) => Err(e),
+            })
+            .flatten_ok();
+
+        Ok(device_config_pairs.filter_map(|r| {
+            let Ok((d, c)) = r else {
+                return None;
+            };
+            let sample_rate = self.sample_rate().map_or_else(
+                || c.min_sample_rate().max(cpal::SampleRate(16000)),
+                cpal::SampleRate,
+            );
+            if c.min_sample_rate() > sample_rate || c.max_sample_rate() < sample_rate {
+                None
+            } else {
+                let min_sample_rate = c.min_sample_rate();
+                Some((d, c.with_sample_rate(min_sample_rate)))
+            }
+        }))
+    }
 }
 
-#[derive(Debug, Default, Clone, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct State {
     recording_session: Option<RecordingSession>,
     mode: Mode,

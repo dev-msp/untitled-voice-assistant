@@ -7,11 +7,13 @@ use std::{
 use anyhow::anyhow;
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
-    SampleRate, StreamConfig,
+    StreamConfig,
 };
 use crossbeam::channel::Sender;
 
 use crate::app::state::RecordingSession;
+
+use super::process::{read_from_device, Processor};
 
 #[derive(Debug, Clone)]
 pub struct Notifier<T: Clone>(Arc<(Mutex<T>, Condvar)>);
@@ -191,38 +193,9 @@ pub fn record_from_input_device<S>(
 where
     S: MySample,
 {
-    let host = cpal::default_host();
-    let device = host
-        .input_devices()?
-        .find(|x| {
-            x.name()
-                .map(|x| x.contains(session.device_name()))
-                .unwrap_or(false)
-        })
-        .ok_or(anyhow!("no input device available"))?;
-
-    let supported_config = device
-        .supported_input_configs()?
-        .map(|c| {
-            log::debug!(
-                "channels: {}, sample rate: {} - {}",
-                c.channels(),
-                c.min_sample_rate().0,
-                c.max_sample_rate().0
-            );
-            c
-        })
-        .find_map(|c| {
-            let sample_rate = session
-                .sample_rate()
-                .map_or_else(|| c.min_sample_rate().max(SampleRate(16000)), SampleRate);
-            if c.min_sample_rate() > sample_rate || c.max_sample_rate() < sample_rate {
-                None
-            } else {
-                let min_sample_rate = c.min_sample_rate();
-                Some(c.with_sample_rate(min_sample_rate))
-            }
-        })
+    let (device, supported_config) = session
+        .supported_configs()?
+        .next()
         .ok_or(anyhow!("no supported input configuration"))?;
 
     controller.wait_for(RecordState::Started);
@@ -232,56 +205,20 @@ where
     };
 
     let cfg: cpal::StreamConfig = supported_config.clone().into();
-    let cfg_inner = cfg.clone();
-    if cfg.channels == 1 {
-        let resampler =
-            super::process::Processor::<f32, S, 1>::new(chan.clone(), cfg_inner.clone(), 512);
-
-        let resampler = Arc::new(Mutex::new(resampler));
-        {
-            let resampler_send = resampler.clone();
-            let stream = device.build_input_stream(
-                &cfg,
-                move |data, _| {
-                    resampler_send
-                        .lock()
-                        .expect("failed to lock resampler")
-                        .write_input_data(data)
-                        .expect("failed to write data");
-                },
-                move |err| log::trace!("an error occurred on stream: {}", err),
-            )?;
-            stream.play()?;
-            controller.recording();
-
-            controller.wait_for(RecordState::Stopped);
-        }
+    let stream = if cfg.channels == 1 {
+        let resampler = Processor::<S, 1>::new(chan, cfg.clone(), 512);
+        read_from_device(resampler, &device)
     } else if cfg.channels == 2 {
-        let resampler =
-            super::process::Processor::<f32, S, 2>::new(chan.clone(), cfg_inner.clone(), 512);
-
-        let resampler = Arc::new(Mutex::new(resampler));
-        {
-            let resampler_send = resampler.clone();
-            let stream = device.build_input_stream(
-                &cfg,
-                move |data, _| {
-                    resampler_send
-                        .lock()
-                        .expect("failed to lock resampler")
-                        .write_input_data(data)
-                        .expect("failed to write data");
-                },
-                move |err| log::trace!("an error occurred on stream: {}", err),
-            )?;
-            stream.play()?;
-            controller.recording();
-
-            controller.wait_for(RecordState::Stopped);
-        }
+        let resampler = Processor::<S, 2>::new(chan, cfg.clone(), 512);
+        read_from_device(resampler, &device)
     } else {
-        panic!("unsupported channel count");
-    }
+        panic!("unsupported channel count: {}", cfg.channels);
+    }?;
+
+    stream.play()?;
+    controller.recording();
+
+    controller.wait_for(RecordState::Stopped);
     Ok(cfg)
 }
 
