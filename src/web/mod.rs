@@ -68,25 +68,44 @@ async fn set_mode(app: AppChannel, mode: web::Json<Mode>) -> impl Responder {
     ApiResponder { content: response }
 }
 
-pub async fn run<A: std::net::ToSocketAddrs>(
-    addr: A,
+pub struct Server {
+    addr: (String, u16),
     commands: Sender<Command>,
     responses: Receiver<Response>,
-) -> std::io::Result<()> {
-    let server = HttpServer::new(move || {
-        let voice = web::scope("/voice")
-            .service(start)
-            .service(stop)
-            .service(set_mode)
-            .app_data(Data::new(AppEvents(commands.clone(), responses.clone())));
+}
 
-        App::new().wrap(Logger::default()).service(voice)
-    })
-    .bind(addr)?;
+impl Server {
+    pub fn new(
+        addr: (String, u16),
+        commands: Sender<Command>,
+        responses: Receiver<Response>,
+    ) -> Self {
+        Self {
+            addr,
+            commands,
+            responses,
+        }
+    }
 
-    let handle = server.run().await;
-    log::warn!("Server finished?");
-    handle
+    pub async fn run(self) -> std::io::Result<()> {
+        let server = HttpServer::new(move || {
+            let voice = web::scope("/voice")
+                .service(start)
+                .service(stop)
+                .service(set_mode)
+                .app_data(Data::new(AppEvents(
+                    self.commands.clone(),
+                    self.responses.clone(),
+                )));
+
+            App::new().wrap(Logger::default()).service(voice)
+        })
+        .bind(&self.addr)?;
+
+        let handle = server.run().await;
+        log::warn!("Server finished?");
+        handle
+    }
 }
 
 pub fn parse_addr_option(s: &str) -> Result<(String, u16), anyhow::Error> {

@@ -1,14 +1,14 @@
 #![deny(clippy::pedantic)]
 mod app;
 mod audio;
+mod client;
 mod socket;
 mod sync;
 mod web;
 mod whisper;
 
-use app::{command::Command, response::Response};
 use clap::Parser;
-use crossbeam::channel::{Receiver, Sender};
+use client::RunningApp;
 use tokio::task::spawn_blocking;
 use whisper_rs::install_whisper_log_trampoline;
 
@@ -25,6 +25,7 @@ struct App {
 enum Commands {
     ListChannels,
     RunDaemon(DaemonInit),
+    Client(client::App),
 }
 
 #[derive(Debug, clap::Args)]
@@ -50,30 +51,23 @@ impl DaemonInit {
     }
 }
 
-fn run_daemon(
-    app: DaemonInit,
-    commands: Receiver<Command>,
-    responses: Sender<Response>,
-) -> Result<bool, anyhow::Error> {
-    log::info!("Launching with settings: {:?}", app);
-
-    let mut daemon = Daemon::new(app);
-
-    daemon.run_loop(commands, responses)
-}
-
 async fn run_web_server(addr: (String, u16), app: DaemonInit) -> std::io::Result<bool> {
     let (commands_out, commands_in) = crossbeam::channel::bounded(1);
     let (responses_out, responses_in) = crossbeam::channel::bounded(1);
-    let handle = spawn_blocking(|| run_daemon(app, commands_in, responses_out));
+    let handle = spawn_blocking(move || {
+        log::info!("Launching with settings: {:?}", app);
+        let mut daemon = Daemon::new(app);
+        daemon.run_loop(commands_in, responses_out)
+    });
 
-    let server = web::run(addr, commands_out, responses_in);
+    let server = web::Server::new(addr, commands_out, responses_in);
+    let server_handle = server.run();
 
     tokio::select! {
         app_finished = handle => {
             Ok(app_finished.expect("failed to join app thread").expect("app failed"))
         },
-        outcome = server => {
+        outcome = server_handle => {
             outcome.expect("server failed");
             log::info!("server finished");
             Ok(false)
@@ -88,13 +82,19 @@ async fn main() -> Result<(), anyhow::Error> {
     env_logger::init();
 
     match App::parse().command {
+        Commands::Client(client_command) => {
+            let resp = RunningApp::from(client_command).execute().await?;
+            log::info!("{:?}", resp);
+            Ok(())
+        }
         Commands::ListChannels => audio::input::list_channels(),
         Commands::RunDaemon(app) => {
             let should_reset = match (&app.socket_path, &app.serve) {
                 (None, Some(a)) => run_web_server(a.clone(), app).await?,
                 (Some(p), None) => {
                     let (rcmds, resps, listener) = socket::receive_instructions(p.clone())?;
-                    let outcome = run_daemon(app, rcmds, resps)?;
+                    let mut daemon = Daemon::new(app);
+                    let outcome = daemon.run_loop(rcmds, resps)?;
                     listener.join().expect("failed to join listener thread")?;
                     outcome
                 }

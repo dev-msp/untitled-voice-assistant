@@ -200,7 +200,7 @@ impl State {
     }
 }
 
-#[derive(Debug, Default, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Default, Clone, Eq, PartialEq, clap::ValueEnum, Deserialize, Serialize)]
 #[serde(tag = "type", content = "data")]
 pub enum Mode {
     #[serde(rename = "standard")]
