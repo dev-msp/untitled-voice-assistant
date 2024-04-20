@@ -1,6 +1,6 @@
-use anyhow::anyhow;
 use std::time::Duration;
 
+use anyhow::anyhow;
 use crossbeam::channel::SendError;
 use whisper_rs::WhisperError;
 

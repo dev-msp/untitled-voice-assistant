@@ -2,7 +2,6 @@ use std::{iter::Copied, slice::Iter};
 
 use cpal::{traits::DeviceTrait, Device, Stream};
 use crossbeam::channel::Sender;
-
 use dasp::{
     interpolate::sinc::Sinc,
     ring_buffer,

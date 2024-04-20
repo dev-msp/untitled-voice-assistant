@@ -9,10 +9,9 @@ use anyhow::anyhow;
 use crossbeam::channel::{Receiver, Sender};
 use serde::Serialize;
 
-use crate::app::{
-    command::Command,
-    response::Response,
-    state::{Mode, RecordingSession},
+use crate::{
+    app::{command::Command, response::Response, state::Mode},
+    audio::Session,
 };
 
 struct ApiResponder<T> {
@@ -32,7 +31,7 @@ type AppChannel = web::Data<AppEvents>;
 struct AppEvents(Sender<Command>, Receiver<Response>);
 
 impl AppEvents {
-    fn start(&self, session: RecordingSession) -> Response {
+    fn start(&self, session: Session) -> Response {
         self.request(Command::Start(session))
     }
 
@@ -51,7 +50,7 @@ impl AppEvents {
 }
 
 #[post("/start")]
-async fn start(app: AppChannel, session: web::Json<RecordingSession>) -> impl Responder {
+async fn start(app: AppChannel, session: web::Json<Session>) -> impl Responder {
     let response = app.start(session.into_inner());
     ApiResponder { content: response }
 }

@@ -59,7 +59,7 @@ impl RunningApp {
 }
 
 mod api {
-    use crate::app::state::{Mode, RecordingSession};
+    use crate::{app::state::Mode, audio::Session};
 
     pub struct Client {
         inner: reqwest::Client,
@@ -80,7 +80,7 @@ mod api {
             sample_rate: Option<u32>,
         ) -> Result<reqwest::Response, anyhow::Error> {
             let body =
-                serde_json::to_value(RecordingSession::new(input_device, sample_rate))?.to_string();
+                serde_json::to_value(Session::new(input_device, sample_rate, None))?.to_string();
             println!("body: {body}");
             let req = self.post("/voice/start").body(body).build()?;
             Ok(self.execute(req).await?)

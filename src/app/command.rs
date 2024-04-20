@@ -2,14 +2,15 @@ use crossbeam::channel::Receiver;
 
 use super::{
     response::Response,
-    state::{Mode, RecordingSession, State},
+    state::{Mode, State},
 };
+use crate::audio::Session;
 
 #[derive(Debug, Clone, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum Command {
     #[serde(rename = "start")]
-    Start(RecordingSession),
+    Start(Session),
 
     #[serde(rename = "stop")]
     Stop, // need timestamp?

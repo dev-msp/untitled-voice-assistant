@@ -8,15 +8,16 @@ use anyhow::anyhow;
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use sttx::IteratorExt;
 
-use crate::audio::input::{controlled_recording, Recording};
+use self::{
+    command::{CmdStream, Command},
+    response::Response,
+};
 use crate::{
+    audio::Recording,
     sync,
     whisper::{self, transcription::Job},
     DaemonInit,
 };
-
-use self::command::{CmdStream, Command};
-use self::response::Response;
 
 pub struct Daemon {
     config: DaemonInit,
@@ -61,9 +62,8 @@ impl Daemon {
 
         let mut commands = CmdStream::new(commands);
 
-        #[allow(unused_assignments)]
         let mut exit_code = 0_u8;
-        let mut rec: Option<Recording<_, Vec<f32>>> = None;
+        let mut rec: Option<Recording<_, Vec<f32>, anyhow::Error>> = None;
         for (ref command, ref new_state) in commands.run_state_machine(&mut self.state) {
             let Some(new_state) = new_state else {
                 responses.send(Response::Nil)?;
@@ -74,7 +74,7 @@ impl Daemon {
                 Command::Start(session) => {
                     assert!(new_state.running());
 
-                    rec = Some(controlled_recording(
+                    rec = Some(Recording::<_, _, anyhow::Error>::controlled(
                         session.clone(),
                         sync::ProcessNode::new(|it| it.collect::<Vec<_>>()),
                     ));
