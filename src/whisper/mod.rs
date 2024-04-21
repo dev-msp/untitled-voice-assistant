@@ -9,6 +9,27 @@ use whisper_rs::{FullParams, WhisperContext, WhisperError};
 
 use self::transcription::TranscribeResult;
 
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("lib error: {0}")]
+    Lib(#[from] WhisperError),
+
+    #[error("transcription error: {0}")]
+    Transcription(#[from] transcription::Error),
+
+    #[error("Send error")]
+    Send,
+
+    #[error("Try to eliminate this")]
+    CatchAll,
+}
+
+impl<T> From<crossbeam::channel::SendError<T>> for Error {
+    fn from(_: crossbeam::channel::SendError<T>) -> Self {
+        Self::Send
+    }
+}
+
 pub struct Whisper {
     context: WhisperContext,
 }
@@ -25,6 +46,8 @@ impl Whisper {
         self.context.create_state()
     }
 
+    /// # Panics
+    /// Panics if the strategy is not supported by the model
     pub fn transcribe_audio(
         &self,
         job: &transcription::Job,
@@ -66,6 +89,9 @@ impl Whisper {
                         // we're evenly spacing t0 and t1 for each token in the segment
                         let t0 = 10 * data.t0;
                         let t1 = 10 * data.t1;
+                        assert!(t0 >= 0);
+                        assert!(t1 >= 0);
+
                         out.push(Timing::new(
                             t0.try_into().unwrap(),
                             t1.try_into().unwrap(),
@@ -82,15 +108,12 @@ impl Whisper {
     }
 }
 
-type WorkerHandle = (
-    Receiver<TranscribeResult>,
-    JoinHandle<Result<(), transcription::Error>>,
-);
+type WorkerHandle = (Receiver<TranscribeResult>, JoinHandle<Result<(), Error>>);
 
 pub fn transcription_worker(
     model: &str,
     jobs: Receiver<transcription::Job>,
-) -> Result<WorkerHandle, anyhow::Error> {
+) -> Result<WorkerHandle, Error> {
     let (snd, recv) = unbounded();
     let whisper = Whisper::new(model)?;
 
@@ -102,7 +125,7 @@ pub fn transcription_worker(
                 let results = whisper
                     .transcribe_audio(&job)
                     .map_err(transcription::Error::from);
-                snd.send(results).map_err(Box::new)?;
+                snd.send(results)?;
             }
             Ok(())
         }),

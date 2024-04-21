@@ -1,12 +1,25 @@
+[workspace]
+ members = [".", "client", "server"]
+
 [package]
 name = "voice"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[workspace.dependencies]
+crossbeam = "0.8.4"
+itertools = "0.12.1"
+thiserror = "1.0.58"
+clap = { version = "4.5.4", features = ["derive"] }
+regex = "1.10.4"
+tracing = { version = "0.1.40", features = ["log"] }
+env_logger = "0.11.3"
+log = "0.4.21"
+serde = { version = "1.0.197", features = ["derive"] }
+serde_json = "1.0.115"
+tokio = { version = "1.37.0", features = ["full"] }
 
 [dependencies]
-anyhow = "1.0.81"
 cpal = "0.14.0"
 dasp = { version = "0.11.0", features = ["all"] }
 hound = "3.5.1"
@@ -14,18 +27,13 @@ webrtc-vad = "0.4.0"
 whisper-rs = { git = "https://github.com/tazz4843/whisper-rs", branch = "master", features = [ "metal", "whisper-cpp-log" ] }
 sttx = { git = "https://github.com/dev-msp/sttx", branch = "main" }
 
-itertools = "0.12.1"
-# linfa = "0.7.0"
-thiserror = "1.0.58"
-clap = { version = "4.5.4", features = ["derive"] }
-regex = "1.10.4"
-tracing = { version = "0.1.40", features = ["log"] }
-env_logger = "0.11.3"
-log = "0.4.21"
-crossbeam = "0.8.4"
-serde = { version = "1.0.197", features = ["derive"] }
-serde_json = "1.0.115"
-
-actix-web = "4.5.1"
-tokio = { version = "1.37.0", features = ["full"] }
-reqwest = "0.12.4"
+crossbeam = { workspace = true }
+itertools = { workspace = true }
+thiserror = { workspace = true }
+clap = { workspace = true }
+regex = { workspace = true }
+tracing = { workspace = true }
+env_logger = { workspace = true }
+log = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

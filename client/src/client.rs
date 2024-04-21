@@ -1,4 +1,10 @@
-use crate::app::{response::Response, state::Mode};
+use voice::app::{response::Response, state::Mode};
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("Client error: {0}")]
+    Client(#[from] api::Error),
+}
 
 #[derive(Debug, clap::Subcommand)]
 pub enum Commands {
@@ -25,8 +31,6 @@ pub struct App {
     host: String,
 }
 
-// make struct "running app" that has command and client fields, and implements From<App>
-
 pub struct RunningApp {
     command: Commands,
     client: api::Client,
@@ -42,8 +46,8 @@ impl From<App> for RunningApp {
 }
 
 impl RunningApp {
-    pub async fn execute(self) -> Result<Response, anyhow::Error> {
-        let resp = match self.command {
+    pub async fn execute(self) -> Result<Response, Error> {
+        Ok(match self.command {
             Commands::Start {
                 input_device,
                 sample_rate,
@@ -51,15 +55,26 @@ impl RunningApp {
             Commands::Stop => self.client.stop().await,
             Commands::Reset => self.client.reset().await,
             Commands::ChangeMode { mode } => self.client.change_mode(mode).await,
-        }?;
-        Ok(serde_json::from_str(
-            &resp.error_for_status()?.text().await?,
-        )?)
+        }?)
     }
 }
 
 mod api {
-    use crate::{app::state::Mode, audio::Session};
+    use serde::de::DeserializeOwned;
+
+    use voice::{
+        app::{response::Response, state::Mode},
+        audio::Session,
+    };
+
+    #[derive(Debug, thiserror::Error)]
+    pub enum Error {
+        #[error("HTTP error: {0}")]
+        Http(#[from] reqwest::Error),
+
+        #[error("JSON error: {0}")]
+        Json(#[from] serde_json::Error),
+    }
 
     pub struct Client {
         inner: reqwest::Client,
@@ -78,30 +93,30 @@ mod api {
             &self,
             input_device: Option<String>,
             sample_rate: Option<u32>,
-        ) -> Result<reqwest::Response, anyhow::Error> {
+        ) -> Result<Response, Error> {
             let body =
                 serde_json::to_value(Session::new(input_device, sample_rate, None))?.to_string();
             println!("body: {body}");
             let req = self.post("/voice/start").body(body).build()?;
-            Ok(self.execute(req).await?)
+            self.execute(req).await
         }
 
-        pub async fn stop(&self) -> Result<reqwest::Response, anyhow::Error> {
+        pub async fn stop(&self) -> Result<Response, Error> {
             let req = self.post("/voice/stop").build()?;
-            Ok(self.execute(req).await?)
+            self.execute(req).await
         }
 
-        pub async fn reset(&self) -> Result<reqwest::Response, anyhow::Error> {
+        pub async fn reset(&self) -> Result<Response, Error> {
             let req = self.post("/voice/reset").build()?;
-            Ok(self.execute(req).await?)
+            self.execute(req).await
         }
 
-        pub async fn change_mode(&self, mode: Mode) -> Result<reqwest::Response, anyhow::Error> {
+        pub async fn change_mode(&self, mode: Mode) -> Result<Response, Error> {
             let req = self
                 .post("/voice/mode")
                 .body(serde_json::json!({ "mode": mode }).to_string())
                 .build()?;
-            Ok(self.execute(req).await?)
+            self.execute(req).await
         }
 
         fn post(&self, path: &str) -> reqwest::RequestBuilder {
@@ -115,11 +130,13 @@ mod api {
         }
 
         /// Delegates to the inner client's method.
-        fn execute(
+        async fn execute<T: DeserializeOwned>(
             &self,
             request: reqwest::Request,
-        ) -> impl std::future::Future<Output = Result<reqwest::Response, reqwest::Error>> {
-            self.inner.execute(request)
+        ) -> Result<T, Error> {
+            let resp = self.inner.execute(request).await?;
+            let r = resp.error_for_status()?;
+            Ok(serde_json::from_str(&r.text().await?)?)
         }
     }
 }

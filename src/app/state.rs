@@ -1,7 +1,4 @@
-use std::sync::Arc;
-
-use cpal::{traits::DeviceTrait, Device};
-use serde::{ser::SerializeStruct, Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 
 use super::command::Command;
 use crate::audio::Session;
@@ -20,53 +17,13 @@ pub struct State {
     mode: Mode,
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum DeviceError {
-    #[error("Device error: {0}")]
-    Core(#[from] cpal::DevicesError),
-
-    #[error("Device name error: {0}")]
-    Name(#[from] cpal::DeviceNameError),
-}
-
-pub struct SupportedDevice {
-    device: Arc<Device>,
-    sample_rate_range: (u32, u32),
-    sample_format: cpal::SampleFormat,
-    channels: u16,
-    buffer_size: cpal::SupportedBufferSize,
-}
-
-impl Serialize for SupportedDevice {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let (min, max) = self.sample_rate_range;
-        let (buf_floor, buf_ceil) = match self.buffer_size {
-            cpal::SupportedBufferSize::Range { min, max } => (min, max),
-            cpal::SupportedBufferSize::Unknown => unimplemented!(),
-        };
-        let sample_format = match self.sample_format {
-            cpal::SampleFormat::F32 => "f32",
-            cpal::SampleFormat::I16 => "i16",
-            cpal::SampleFormat::U16 => "u16",
-        };
-        let mut state = serializer.serialize_struct("SupportedDevice", 6)?;
-        state.serialize_field("device", &self.device.name().unwrap())?;
-        state.serialize_field("sample_rate", &(min, max))?;
-        state.serialize_field("sample_format", sample_format)?;
-        state.serialize_field("channels", &self.channels)?;
-        state.serialize_field("buffer_size", &(buf_floor, buf_ceil))?;
-        state.end()
-    }
-}
-
 impl State {
+    #[must_use]
     pub fn running(&self) -> bool {
         matches!(self.audio, Audio::Started(_))
     }
 
+    #[must_use]
     pub fn mode(&self) -> Mode {
         self.mode.clone()
     }

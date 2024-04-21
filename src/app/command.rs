@@ -26,6 +26,7 @@ pub enum Command {
 }
 
 impl Command {
+    #[must_use]
     pub fn as_response(&self) -> Option<Response> {
         match self {
             Self::Mode(mode) => Some(Response::NewMode(mode.clone())),
@@ -38,6 +39,7 @@ impl Command {
 pub struct CmdStream(Receiver<Command>);
 
 impl CmdStream {
+    #[must_use]
     pub fn new(recv: Receiver<Command>) -> Self {
         Self(recv)
     }

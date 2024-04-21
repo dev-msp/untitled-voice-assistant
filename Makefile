@@ -1,7 +1,9 @@
-TARGET = voice
+BIN_NAME = server
 BUILD_MODE = release
 
-BIN = target/$(BUILD_MODE)/$(TARGET)
+TARGET = $(BIN_NAME)_$(BUILD_MODE)
+
+BIN = target/$(BUILD_MODE)/$(BIN_NAME)
 
 all: $(TARGET)
 
@@ -14,7 +16,7 @@ $(TARGET): $(BIN)
 	cp $(BIN) $(TARGET)
 
 $(BIN):
-	cargo build --$(BUILD_MODE)
+	cargo build --$(BUILD_MODE) -p $(BIN_NAME)
 
 DAEMON = local.personal.transcription
 

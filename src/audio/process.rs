@@ -1,7 +1,7 @@
 use std::{iter::Copied, slice::Iter};
 
 use cpal::{traits::DeviceTrait, Device, Stream};
-use crossbeam::channel::Sender;
+use crossbeam::channel::{SendError, Sender};
 use dasp::{
     interpolate::sinc::Sinc,
     ring_buffer,
@@ -11,6 +11,21 @@ use dasp::{
 use itertools::Itertools;
 
 use super::MySample;
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("build stream error: {0}")]
+    BuildStream(#[from] cpal::BuildStreamError),
+
+    #[error("Send error")]
+    Send,
+}
+
+impl<T> From<SendError<T>> for Error {
+    fn from(_: SendError<T>) -> Self {
+        Self::Send
+    }
+}
 
 pub trait InputSample: cpal::Sample + dasp::Sample + Default {}
 impl<T> InputSample for T where T: cpal::Sample + dasp::Sample + Default {}
@@ -25,7 +40,7 @@ pub trait Process {
 
     fn config(&self) -> &cpal::StreamConfig;
 
-    fn send(&self, sample: Self::Output) -> Result<(), anyhow::Error>;
+    fn send(&self, sample: Self::Output) -> Result<(), Error>;
 
     fn interpolator() -> Sinc<[Self::Frame; 128]>;
 
@@ -44,7 +59,7 @@ pub trait Process {
         )
     }
 
-    fn write_input_data(&mut self, input: &[Self::Input]) -> Result<(), anyhow::Error> {
+    fn write_input_data(&mut self, input: &[Self::Input]) -> Result<(), Error> {
         for sample in self.mono_samples(input).collect_vec() {
             self.send(sample)?;
         }
@@ -56,7 +71,7 @@ pub trait Process {
 pub fn read_from_device<P: Process + Send + Sync + 'static>(
     mut processor: P,
     device: &Device,
-) -> Result<Stream, anyhow::Error> {
+) -> Result<Stream, Error> {
     Ok(device.build_input_stream(
         &processor.config().clone(),
         move |data, _| {
@@ -79,16 +94,7 @@ impl<O, const CHANNELS: usize> Processor<O, CHANNELS>
 where
     O: MySample,
 {
-    pub fn new(sink: Sender<O>, config: cpal::StreamConfig, chunk_size_out: usize) -> Self {
-        let input_rate = config.sample_rate.0 as usize;
-        let channels = config.channels as usize;
-        log::debug!(
-            "Creating resampler with input rate: {}, chunk size: {}, channels: {}",
-            input_rate,
-            chunk_size_out,
-            channels
-        );
-
+    pub fn new(sink: Sender<O>, config: cpal::StreamConfig) -> Self {
         Self { config, sink }
     }
 }
@@ -124,10 +130,8 @@ impl<O: MySample> Process for Processor<O, 1> {
         <Self::Output as cpal::Sample>::from(&frame)
     }
 
-    fn send(&self, sample: O) -> Result<(), anyhow::Error> {
-        self.sink
-            .send(sample)
-            .map_err(|_| anyhow::anyhow!("failed to send sample"))
+    fn send(&self, sample: O) -> Result<(), Error> {
+        Ok(self.sink.send(sample)?)
     }
 }
 
@@ -166,9 +170,7 @@ impl<O: MySample> Process for Processor<O, 2> {
         <Self::Output as cpal::Sample>::from(&avg)
     }
 
-    fn send(&self, sample: O) -> Result<(), anyhow::Error> {
-        self.sink
-            .send(sample)
-            .map_err(|_| anyhow::anyhow!("failed to send sample"))
+    fn send(&self, sample: O) -> Result<(), Error> {
+        Ok(self.sink.send(sample)?)
     }
 }

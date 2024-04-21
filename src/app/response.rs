@@ -23,6 +23,10 @@ pub enum Response {
 }
 
 impl Response {
+    /// # Panics
+    ///
+    /// when `std::time::SystemTime::now()` is earlier than `std::time::UNIX_EPOCH`
+    #[must_use]
     pub fn ack() -> Self {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

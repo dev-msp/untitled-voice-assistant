@@ -5,11 +5,10 @@ use actix_web::{
     web::{self, Data},
     App, HttpRequest, HttpResponse, HttpServer, Responder,
 };
-use anyhow::anyhow;
 use crossbeam::channel::{Receiver, Sender};
 use serde::Serialize;
 
-use crate::{
+use voice::{
     app::{command::Command, response::Response, state::Mode},
     audio::Session,
 };
@@ -74,6 +73,7 @@ pub struct Server {
 }
 
 impl Server {
+    #[must_use]
     pub fn new(
         addr: (String, u16),
         commands: Sender<Command>,
@@ -107,9 +107,26 @@ impl Server {
     }
 }
 
-pub fn parse_addr_option(s: &str) -> Result<(String, u16), anyhow::Error> {
+#[derive(Debug, thiserror::Error)]
+pub enum AddressParseError {
+    #[error("missing host")]
+    MissingHost,
+
+    #[error("missing port")]
+    MissingPort,
+
+    #[error("parse error: {0}")]
+    ParsePort(#[from] std::num::ParseIntError),
+}
+
+pub fn parse_addr_option(s: &str) -> Result<(String, u16), AddressParseError> {
     let mut parts = s.split(':');
-    let host = parts.next().ok_or(anyhow!("no host provided"))?;
-    let port = parts.next().ok_or(anyhow!("no port provided"))?.parse()?;
+    let host = parts.next().ok_or(AddressParseError::MissingHost)?;
+    let port = parts
+        .next()
+        .ok_or(AddressParseError::MissingPort)?
+        .parse()
+        .map_err(AddressParseError::ParsePort)?;
+
     Ok((host.to_string(), port))
 }

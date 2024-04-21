@@ -56,6 +56,7 @@ impl Default for Config {
 }
 
 impl Config {
+    #[must_use]
     pub fn samples_per_frame(&self) -> usize {
         self.resolution.as_millis() as usize / self.sample_size as usize
     }
@@ -65,10 +66,12 @@ impl TryFrom<&Config> for Vad {
     type Error = Error;
 
     fn try_from(cfg: &Config) -> Result<Self, Self::Error> {
+        let sample_rate = i32::from(cfg.sample_rate);
+        if sample_rate <= 0 {
+            return Err(Error::BadSampleRate);
+        }
         Ok(Vad::new_with_rate_and_mode(
-            i32::from(cfg.sample_rate)
-                .try_into()
-                .or(Err(Error::BadSampleRate))?,
+            sample_rate.try_into().or(Err(Error::BadSampleRate))?,
             cfg.mode.into(),
         ))
     }
@@ -100,11 +103,12 @@ impl Buffer<'_> {
 }
 
 impl Config {
+    #[must_use]
     pub fn buffer_size(&self) -> usize {
-        assert!(self.sample_rate > 0);
         (self.sample_size as u16 * self.sample_rate / 1000) as usize
     }
 
+    #[must_use]
     pub fn buffer_from<'a>(&self, index: usize, data: &'a [i16]) -> Buffer<'a> {
         Buffer {
             index,

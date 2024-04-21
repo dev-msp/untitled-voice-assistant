@@ -8,7 +8,6 @@ use std::{
     thread::{self},
 };
 
-use anyhow::anyhow;
 use crossbeam::{
     atomic::AtomicCell,
     channel::{unbounded, Receiver, SendError, Sender},
@@ -18,16 +17,23 @@ use serde::{de::DeserializeOwned, Serialize};
 struct DebugBufReader<R: BufRead>(R);
 
 #[derive(Debug, thiserror::Error)]
-#[error("socket error: {0}")]
-enum Error {
+pub enum Error {
+    #[error("socket error: {0}")]
     Stream(#[from] std::io::Error),
+    #[error("socket error: {0}")]
     Read(#[from] ReadError),
+    #[error("socket error: {0}")]
     Write(#[from] WriteError),
+
+    #[error("not a socket")]
+    NotASocket,
+    #[error("nonexistent socket")]
+    NonexistentSocket,
 }
 
 #[derive(Debug, thiserror::Error)]
 #[error("read: {0}")]
-enum ReadError {
+pub enum ReadError {
     #[error("parse: {0}")]
     Parse(#[from] serde_json::Error),
 
@@ -37,7 +43,7 @@ enum ReadError {
 
 #[derive(Debug, thiserror::Error)]
 #[error("write error: {0}")]
-enum WriteError {
+pub enum WriteError {
     #[error("io: {0}")]
     Io(#[from] io::Error),
     #[error("json: {0}")]
@@ -196,14 +202,12 @@ where
     Ok(())
 }
 
-type Handle = std::thread::JoinHandle<Result<(), anyhow::Error>>;
+type Handle = std::thread::JoinHandle<Result<(), Error>>;
 
 // Triple of channel pair (commands), sender (responses), and handle for the socket thread
 type InstructionHandle<I, O> = (Receiver<I>, Sender<O>, Handle);
 
-pub fn receive_instructions<I, O>(
-    socket_path: String,
-) -> Result<InstructionHandle<I, O>, anyhow::Error>
+pub fn receive_instructions<I, O>(socket_path: String) -> Result<InstructionHandle<I, O>, Error>
 where
     I: Send + Sync + DeserializeOwned + 'static,
     O: Send + Serialize + 'static,
@@ -212,9 +216,9 @@ where
         Ok(metadata) if metadata.file_type().is_socket() => {
             std::fs::remove_file(&socket_path)?;
         }
-        Ok(_) => return Err(anyhow!("socket path exists and is not a Unix socket")),
+        Ok(_) => return Err(Error::NotASocket),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(anyhow!(e).context("unhandled error attempting to access socket")),
+        Err(e) => return Err(e.into()),
     }
     let (commands_out, commands_in) = unbounded();
     let (responses_out, responses_in) = unbounded();
@@ -222,7 +226,7 @@ where
         commands_in,
         responses_out,
         std::thread::spawn(move || {
-            let listener = UnixListener::bind(socket_path).expect("Failed to bind to socket");
+            let listener = UnixListener::bind(socket_path)?;
 
             let mut incoming = listener.incoming();
             while let Some(rstream) = incoming.next().transpose()? {

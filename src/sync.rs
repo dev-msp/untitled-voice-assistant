@@ -27,6 +27,7 @@ where
         }
     }
 
+    #[must_use]
     pub fn run(self) -> (Sender<T>, JoinHandle<R>) {
         let ProcessNode { callback, .. } = self;
 

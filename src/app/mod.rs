@@ -4,8 +4,7 @@ pub mod state;
 
 use std::time::SystemTime;
 
-use anyhow::anyhow;
-use crossbeam::channel::{unbounded, Receiver, Sender};
+use crossbeam::channel::{unbounded, Receiver, SendError, Sender};
 use sttx::IteratorExt;
 
 use self::{
@@ -13,35 +12,77 @@ use self::{
     response::Response,
 };
 use crate::{
-    audio::Recording,
+    audio::{Recording, RecordingError},
     sync,
     whisper::{self, transcription::Job},
-    DaemonInit,
 };
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("Try to eliminate this")]
+    CatchAll,
+
+    #[error("Error: {0}")]
+    WithMessage(String),
+
+    #[error("Send error")]
+    Send,
+
+    #[error("Whisper error: {0}")]
+    Whisper(#[from] whisper::Error),
+
+    #[error("Recording error: {0}")]
+    Recording(#[from] RecordingError),
+
+    #[error("Socket/IO error: {0}")]
+    Socket(#[from] std::io::Error),
+}
+
+impl<T> From<SendError<T>> for Error {
+    fn from(_: SendError<T>) -> Self {
+        Self::Send
+    }
+}
+
+impl Error {
+    fn message<S: ToString + ?Sized>(msg: &S) -> Self {
+        Self::WithMessage(msg.to_string())
+    }
+}
 
 pub struct Daemon {
     config: DaemonInit,
     state: state::State,
 }
 
-#[derive(Debug, Clone)]
-struct Transcription(Vec<sttx::Timing>);
+#[derive(Debug, clap::Args)]
+pub struct DaemonInit {
+    /// Path to the model file
+    #[clap(short, long)]
+    model: String,
 
-impl Transcription {
-    fn into_iter(self) -> impl Iterator<Item = sttx::Timing> {
-        self.0.into_iter()
+    #[clap(short, long, value_parser = whisper::transcription::parse_strategy)]
+    strategy: Option<whisper::transcription::StrategyOpt>,
+
+    /// Socket path
+    #[clap(long)]
+    socket_path: Option<String>,
+}
+
+impl DaemonInit {
+    #[must_use]
+    pub fn strategy(&self) -> whisper_rs::SamplingStrategy {
+        self.strategy.clone().unwrap_or_default().into()
     }
 
-    fn process(self) -> Option<sttx::Timing> {
-        self.into_iter()
-            .join_continuations()
-            .sentences()
-            .filter(|s| !s.content().starts_with('['))
-            .collect()
+    #[must_use]
+    pub fn socket_path(&self) -> Option<&str> {
+        self.socket_path.as_deref()
     }
 }
 
 impl Daemon {
+    #[must_use]
     pub fn new(config: DaemonInit) -> Self {
         Self {
             config,
@@ -50,11 +91,12 @@ impl Daemon {
     }
 
     /// Runs the main application loop.
+    #[allow(clippy::missing_panics_doc)]
     pub fn run_loop(
         &mut self,
         commands: Receiver<Command>,
         responses: Sender<Response>,
-    ) -> Result<bool, anyhow::Error> {
+    ) -> Result<bool, Error> {
         let model = self.config.model.clone();
 
         let (to_whisper, from_recordings) = unbounded();
@@ -63,7 +105,7 @@ impl Daemon {
         let mut commands = CmdStream::new(commands);
 
         let mut exit_code = 0_u8;
-        let mut rec: Option<Recording<_, Vec<f32>, anyhow::Error>> = None;
+        let mut rec: Option<Recording<_, Vec<f32>>> = None;
         for (ref command, ref new_state) in commands.run_state_machine(&mut self.state) {
             let Some(new_state) = new_state else {
                 responses.send(Response::Nil)?;
@@ -74,10 +116,18 @@ impl Daemon {
                 Command::Start(session) => {
                     assert!(new_state.running());
 
-                    rec = Some(Recording::<_, _, anyhow::Error>::controlled(
+                    let new_rec = match Recording::<_, _, Error>::controlled(
                         session.clone(),
                         sync::ProcessNode::new(|it| it.collect::<Vec<_>>()),
-                    ));
+                    ) {
+                        Ok(new_rec) => new_rec,
+                        Err(e) => {
+                            responses.send(Response::Error(e.to_string()))?;
+                            continue;
+                        }
+                    };
+
+                    rec = Some(new_rec);
 
                     rec.as_mut().unwrap().start();
                     let now = SystemTime::now()
@@ -104,7 +154,7 @@ impl Daemon {
                     let transcription = whisper_output
                         .iter()
                         .next()
-                        .ok_or(anyhow!("No transcription"))?;
+                        .ok_or(Error::message("No transcription"))?;
 
                     match transcription {
                         Ok(t) => {
@@ -158,5 +208,22 @@ impl Daemon {
             std::fs::remove_file(p)?;
         }
         Ok(false)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Transcription(Vec<sttx::Timing>);
+
+impl Transcription {
+    fn into_iter(self) -> impl Iterator<Item = sttx::Timing> {
+        self.0.into_iter()
+    }
+
+    fn process(self) -> Option<sttx::Timing> {
+        self.into_iter()
+            .join_continuations()
+            .sentences()
+            .filter(|s| !s.content().starts_with('['))
+            .collect()
     }
 }
