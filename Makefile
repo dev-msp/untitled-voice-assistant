@@ -1,5 +1,5 @@
 BUILD_MODE:=release
-PACKAGE=server client
+PACKAGE=server client llm
 BINARIES=$(addprefix target/$(BUILD_MODE)/, $(PACKAGE))
 INSTALLED_BINARIES=$(addprefix $(INSTALL_DIR)/voice-, $(PACKAGE))
 
