@@ -1,24 +1,45 @@
-BIN_NAME = server
-BUILD_MODE = release
+BUILD_MODE:=release
+PACKAGE=server client
+BINARIES=$(addprefix target/$(BUILD_MODE)/, $(PACKAGE))
+INSTALLED_BINARIES=$(addprefix $(INSTALL_DIR)/voice-, $(PACKAGE))
 
-TARGET = $(BIN_NAME)_$(BUILD_MODE)
+all: $(BINARIES)
 
-BIN = target/$(BUILD_MODE)/$(BIN_NAME)
+.PHONY: require-bin
+require-bin:
+ifndef INSTALL_DIR
+	$(error INSTALL_DIR is not set)
+endif
 
-all: $(TARGET)
+.PHONY: install
+install: require-bin $(INSTALLED_BINARIES)
 
 .PHONY: clean
-clean:
+clean: clean-bin
 	cargo clean
-	rm -f $(TARGET)
 
-$(TARGET): $(BIN)
-	cp $(BIN) $(TARGET)
+.PHONY: clean-bin
+clean-bin:
+	rm -f $(BINARIES)
+ifdef $(INSTALL_DIR)
+	rm -f $(INSTALLED_BINARIES)
+endif
 
-$(BIN):
-	cargo build --$(BUILD_MODE) -p $(BIN_NAME)
+$(INSTALL_DIR)/voice-%: target/$(BUILD_MODE)/%
+	cp $< $@
 
-DAEMON = local.personal.transcription
+ifeq ($(words $(PACKAGE)),1)
+target/$(BUILD_MODE)/%:
+else
+$(BINARIES):
+endif
+ifeq ($(BUILD_MODE),release)
+	cargo build --$(BUILD_MODE) $(foreach p, $(PACKAGE),-p $p)
+else
+	cargo build $(foreach p, $(PACKAGE),-p $p)
+endif
 
-kick: $(TARGET)
+DAEMON:=local.personal.transcription
+
+kick: require-bin $(INSTALL_DIR)/voice-server
 	launchctl kickstart -k gui/$(shell id -u)/$(DAEMON)

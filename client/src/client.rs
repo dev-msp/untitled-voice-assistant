@@ -6,7 +6,7 @@ pub enum Error {
     Client(#[from] api::Error),
 }
 
-#[derive(Debug, clap::Subcommand)]
+#[derive(Debug, Clone, clap::Subcommand)]
 pub enum Commands {
     Start {
         #[clap(short, long)]
@@ -23,7 +23,7 @@ pub enum Commands {
     },
 }
 
-#[derive(Debug, clap::Args)]
+#[derive(Debug, clap::Parser)]
 pub struct App {
     #[command(subcommand)]
     pub command: Commands,
@@ -59,7 +59,7 @@ impl RunningApp {
     }
 }
 
-mod api {
+pub mod api {
     use serde::de::DeserializeOwned;
 
     use voice::{
@@ -74,6 +74,9 @@ mod api {
 
         #[error("JSON error: {0}")]
         Json(#[from] serde_json::Error),
+
+        #[error("Unexpected response: {0}")]
+        UnexpectedResponse(Response),
     }
 
     pub struct Client {

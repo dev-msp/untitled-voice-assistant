@@ -6,35 +6,34 @@ Bind requests to hotkeys as you prefer. I'm running the server as a daemon with 
 
 If you don't already have a `whisper.cpp`-compatible model, follow that project's [quick-start instructions](https://github.com/ggerganov/whisper.cpp#quick-start) to get one.
 
-Start the server:
-`./run.sh macbook ggml-base.en.bin /tmp/whisper.sock`
+## Quick start
 
-Start recording: `curl -X POST -H "Content-Type: application/json" -d "$body" "http://127.0.0.1:8088/voice/$1"`
+In your terminal:
 
-Example request body:
-```json
-{
-  // partial name matches OK
-  "input_device": "MacBook Pro Microphone",
+```sh
+# Build the server and client
+INSTALL_DIR=/something/on/your/PATH make install
 
-  // optional
-  "sample_rate": 44100,
-}
-```
-Response: `{ "type": "ack" }`
-
-Stop recording: `curl -X POST http://localhost:8088/voice/stop`
-Example response:
-```json
-{
-  "data": {
-    "content": "And we're recording and we're doing stuff and then we're going to send a stop message.",
-    "mode": {
-      "type": "live_typing"
-    }
-  },
-  "type": "transcription"
-}
+# Start the server
+# (see run.sh for why running the binary directly doesn't work yet)
+./run.sh localhost:8088 $PATH_TO_MODEL
 ```
 
-Note: the modes that you get back in the output are just metadata. Your client application that talks to the server should also handle processing the transcription differently based on the mode.
+In a separate shell:
+
+```sh
+# Send a start command to the server.
+#
+# Note that `-i` is optional, without it the server will use the first
+# compatible device. For example, you might pass "MacBook" if you want to use
+# your laptop's built-in mic ("MacBook Pro Microphone").
+voice-client localhost:8088 start -i $PARTIAL_INPUT_DEVICE_NAME
+```
+
+After executing this command, the server will start recording from this specified input. To get the results, send the stop command:
+
+```sh
+voice-client localhost:8088 stop
+```
+
+The results will be printed to stdout.

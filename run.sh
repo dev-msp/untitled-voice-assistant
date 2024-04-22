@@ -12,15 +12,15 @@ fi
 
 # Additionally, whisper-rs doesn't capture Metal-specific logs for some reason.
 # So you'll still see those in the log output, even if you're suppressing.
-export RUST_LOG=whisper_sys_log=error,voice=debug
+export RUST_LOG=whisper_sys_log=error,voice=debug,server=info
+
+# The address on which the HTTP server should listen (e.g. localhost:PORT)
+addr="$1"
 
 # See the whisper.cpp repo for details on how to get a model. I recommend using
 # base or small for best results.
 model_path="$2"
 
-# The address on which the HTTP server should listen (e.g. localhost:PORT)
-addr="$3"
-
-./voice run-daemon \
-    --serve       "$addr"
+voice-server run-daemon \
+    --serve       "$addr" \
     --model       "$model_path"
