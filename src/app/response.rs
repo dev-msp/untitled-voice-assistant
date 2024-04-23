@@ -1,4 +1,4 @@
-use super::state::{Chat, Mode};
+use super::state::Mode;
 
 #[derive(Debug, Clone, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", content = "data")]
@@ -54,11 +54,7 @@ impl std::fmt::Display for Response {
                 mode,
             } => match mode {
                 Mode::Standard => write!(f, "TX {s}"),
-                // TODO: use contents?
-                Mode::Clipboard { .. } => write!(f, "TX_CLIP {s}"),
                 Mode::LiveTyping => write!(f, "TX_LIVE {s}"),
-                Mode::Chat(Chat::StartNew(system)) => write!(f, "TX_CHAT {system} {s}"),
-                Mode::Chat(Chat::Continue) => write!(f, "TX_CHAT {s}"),
             },
             Self::Transcription { content: None, .. } => write!(f, "TX_EMPTY"),
         }
