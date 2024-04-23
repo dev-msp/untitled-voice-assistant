@@ -1,4 +1,7 @@
-use voice::app::{response::Response, state::Mode};
+use voice::{
+    app::{response::Response, state::Mode},
+    whisper::transcription::Model,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -14,6 +17,9 @@ pub enum Commands {
 
         #[clap(long)]
         sample_rate: Option<u32>,
+
+        #[clap(short, long, value_enum)]
+        model: Option<Model>,
     },
     Stop,
     Reset,
@@ -51,7 +57,8 @@ impl RunningApp {
             Commands::Start {
                 input_device,
                 sample_rate,
-            } => self.client.start(input_device, sample_rate).await,
+                model,
+            } => self.client.start(input_device, sample_rate, model).await,
             Commands::Stop => self.client.stop().await,
             Commands::Reset => self.client.reset().await,
             Commands::ChangeMode { mode } => self.client.change_mode(mode).await,
@@ -61,10 +68,10 @@ impl RunningApp {
 
 pub mod api {
     use serde::de::DeserializeOwned;
-
     use voice::{
         app::{response::Response, state::Mode},
         audio::Session,
+        whisper::transcription::Model,
     };
 
     #[derive(Debug, thiserror::Error)]
@@ -96,9 +103,10 @@ pub mod api {
             &self,
             input_device: Option<String>,
             sample_rate: Option<u32>,
+            model: Option<Model>,
         ) -> Result<Response, Error> {
-            let body =
-                serde_json::to_value(Session::new(input_device, sample_rate, None))?.to_string();
+            let body = serde_json::to_value(Session::new(input_device, sample_rate, None, model))?
+                .to_string();
             println!("body: {body}");
             let req = self.post("/voice/start").body(body).build()?;
             self.execute(req).await

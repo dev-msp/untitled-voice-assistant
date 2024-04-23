@@ -56,8 +56,7 @@ impl CmdStream {
             log::debug!("Received command: {:?}", cmd);
             log::trace!("Current state: {:?}", state);
             let initial = state.clone();
-            let out = state.next_state(&cmd);
-            if out {
+            if state.next_state(&cmd) {
                 log::trace!("State transitioned to {:?}", state);
                 (cmd, Some(state.clone()))
             } else {

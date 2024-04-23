@@ -21,6 +21,4 @@ addr="$1"
 # base or small for best results.
 model_path="$2"
 
-voice-server run-daemon \
-    --serve       "$addr" \
-    --model       "$model_path"
+voice-server run-daemon --serve "$addr"

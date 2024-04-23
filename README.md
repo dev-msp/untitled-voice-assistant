@@ -27,7 +27,7 @@ In a separate shell:
 # Note that `-i` is optional, without it the server will use the first
 # compatible device. For example, you might pass "MacBook" if you want to use
 # your laptop's built-in mic ("MacBook Pro Microphone").
-voice-client localhost:8088 start -i $PARTIAL_INPUT_DEVICE_NAME
+voice-client localhost:8088 start --model small -i $PARTIAL_INPUT_DEVICE_NAME
 ```
 
 After executing this command, the server will start recording from this specified input. To get the results, send the stop command:

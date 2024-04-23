@@ -16,7 +16,7 @@ use super::{
     process::{self, read_from_device, Processor},
     MySample,
 };
-use crate::audio::controller::RecordState;
+use crate::{audio::controller::RecordState, whisper::transcription::Model};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -170,6 +170,7 @@ pub struct Session {
     input_device: Option<String>,
     sample_rate: Option<u32>,
     prompt: Option<String>,
+    model: Option<Model>,
 }
 
 impl Session {
@@ -178,11 +179,13 @@ impl Session {
         input_device: Option<String>,
         sample_rate: Option<u32>,
         prompt: Option<String>,
+        model: Option<Model>,
     ) -> Self {
         Self {
             input_device,
             sample_rate,
             prompt,
+            model,
         }
     }
 
@@ -194,6 +197,11 @@ impl Session {
     #[must_use]
     pub fn sample_rate(&self) -> Option<u32> {
         self.sample_rate
+    }
+
+    #[must_use]
+    pub fn model(&self) -> Option<Model> {
+        self.model
     }
 
     pub fn supported_configs(

@@ -1,6 +1,9 @@
 use std::time::Duration;
 
+use clap::ValueEnum;
 use crossbeam::channel::SendError;
+use derive_builder::{Builder, UninitializedFieldError};
+use serde::{Deserialize, Serialize};
 use whisper_rs::WhisperError;
 
 pub type TranscribeResult = Result<Vec<sttx::Timing>, Error>;
@@ -12,10 +15,44 @@ pub enum Error {
 
     #[error("Whisper error: {0}")]
     Whisper(#[from] WhisperError),
+
+    #[error("Job builder received incomplete data: {0}")]
+    JobBuild(#[from] UninitializedFieldError),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ValueEnum)]
+pub enum Model {
+    #[default]
+    #[serde(rename = "base")]
+    Base,
+
+    #[serde(rename = "small")]
+    Small,
+
+    #[serde(rename = "medium")]
+    Medium,
+
+    #[serde(rename = "large")]
+    Large,
+}
+
+impl Model {
+    #[must_use]
+    pub fn filename(&self) -> String {
+        let base_name = match self {
+            Model::Base => "base.en",
+            Model::Small => "small.en",
+            Model::Medium => "medium",
+            Model::Large => "large",
+        };
+        format!("ggml-{base_name}.bin")
+    }
+}
+
+#[derive(Debug, Builder)]
+#[builder(build_fn(error = "Error"))]
 pub struct Job {
+    model: Model,
     audio: Vec<f32>,
     strategy: whisper_rs::SamplingStrategy,
     sample_rate: u32,
@@ -24,18 +61,8 @@ pub struct Job {
 
 impl Job {
     #[must_use]
-    pub fn new(
-        audio: Vec<f32>,
-        strategy: whisper_rs::SamplingStrategy,
-        sample_rate: u32,
-        prompt: Option<String>,
-    ) -> Self {
-        Self {
-            audio,
-            strategy,
-            sample_rate,
-            prompt,
-        }
+    pub fn builder() -> JobBuilder {
+        JobBuilder::default()
     }
 
     /// # Panics
@@ -64,6 +91,11 @@ impl Job {
     #[must_use]
     pub fn audio(&self) -> &[f32] {
         &self.audio
+    }
+
+    #[must_use]
+    pub fn model(&self) -> Model {
+        self.model
     }
 }
 

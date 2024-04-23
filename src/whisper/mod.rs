@@ -1,13 +1,17 @@
 pub mod transcription;
 
-use std::thread::JoinHandle;
+use std::{
+    collections::{hash_map::Entry, HashMap},
+    path::Path,
+    thread::JoinHandle,
+};
 
 use crossbeam::channel::{unbounded, Receiver};
 use itertools::Itertools;
 use sttx::Timing;
 use whisper_rs::{FullParams, WhisperContext, WhisperError};
 
-use self::transcription::TranscribeResult;
+use self::transcription::{Model, TranscribeResult};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -110,18 +114,34 @@ impl Whisper {
 
 type WorkerHandle = (Receiver<TranscribeResult>, JoinHandle<Result<(), Error>>);
 
+/// # Panics
+///
+/// Thread will panic if the Whisper instance for the given model is missing even after checking
+/// for its existence.
 pub fn transcription_worker(
-    model: &str,
+    model_base_dir: &Path,
     jobs: Receiver<transcription::Job>,
 ) -> Result<WorkerHandle, Error> {
     let (snd, recv) = unbounded();
-    let whisper = Whisper::new(model)?;
+
+    let mut whispers: HashMap<Model, Whisper> = HashMap::new();
+    let base_dir = model_base_dir.to_owned();
 
     Ok((
         recv,
         std::thread::spawn(move || {
             for job in &jobs {
                 log::debug!("Transcribing audio with duration: {:?}", job.duration());
+                let entry = whispers.entry(job.model());
+                if let Entry::Vacant(e) = entry {
+                    log::info!("Creating new whisper instance for model: {:?}", job.model());
+                    // &job.model().filename()
+                    let model_path = base_dir.join(job.model().filename());
+                    e.insert(Whisper::new(
+                        model_path.to_string_lossy().to_string().as_str(),
+                    )?);
+                };
+                let whisper = whispers.get(&job.model()).expect("Whisper not found");
                 let results = whisper
                     .transcribe_audio(&job)
                     .map_err(transcription::Error::from);

@@ -28,6 +28,14 @@ impl State {
         self.mode.clone()
     }
 
+    #[must_use]
+    pub fn session(&self) -> Option<&Session> {
+        match &self.audio {
+            Audio::Started(s) | Audio::Stopped(s) => Some(s),
+            Audio::Idle => None,
+        }
+    }
+
     pub fn prompt(&self) -> Option<String> {
         match &self.audio {
             Audio::Started(s) | Audio::Stopped(s) => s.prompt().map(str::to_owned),

@@ -2,7 +2,7 @@ pub mod command;
 pub mod response;
 pub mod state;
 
-use std::time::SystemTime;
+use std::{path::PathBuf, time::SystemTime};
 
 use crossbeam::channel::{unbounded, Receiver, SendError, Sender};
 use sttx::IteratorExt;
@@ -12,7 +12,7 @@ use self::{
     response::Response,
 };
 use crate::{
-    audio::{Recording, RecordingError},
+    audio::{Recording, RecordingError, Session},
     sync,
     whisper::{self, transcription::Job},
 };
@@ -57,12 +57,11 @@ pub struct Daemon {
 
 #[derive(Debug, clap::Args)]
 pub struct DaemonInit {
-    /// Path to the model file
-    #[clap(short, long)]
-    model: String,
-
     #[clap(short, long, value_parser = whisper::transcription::parse_strategy)]
     strategy: Option<whisper::transcription::StrategyOpt>,
+
+    #[clap(long)]
+    model_dir: PathBuf,
 
     /// Socket path
     #[clap(long)]
@@ -92,15 +91,15 @@ impl Daemon {
 
     /// Runs the main application loop.
     #[allow(clippy::missing_panics_doc)]
+    #[allow(clippy::too_many_lines)]
     pub fn run_loop(
         &mut self,
         commands: Receiver<Command>,
         responses: Sender<Response>,
     ) -> Result<bool, Error> {
-        let model = self.config.model.clone();
-
         let (to_whisper, from_recordings) = unbounded();
-        let (whisper_output, tx_worker) = whisper::transcription_worker(&model, from_recordings)?;
+        let (whisper_output, tx_worker) =
+            whisper::transcription_worker(self.config.model_dir.as_path(), from_recordings)?;
 
         let mut commands = CmdStream::new(commands);
 
@@ -143,12 +142,21 @@ impl Daemon {
                     assert!(!new_state.running());
 
                     let (metadata, audio) = rec.take().unwrap().stop()?;
-                    to_whisper.send(Job::new(
-                        audio,
-                        self.config.strategy(),
-                        metadata.sample_rate.0,
-                        new_state.prompt(),
-                    ))?;
+                    let job = Job::builder()
+                        .model(
+                            new_state
+                                .session()
+                                .and_then(Session::model)
+                                .unwrap_or_default(),
+                        )
+                        .strategy(self.config.strategy())
+                        .audio(audio)
+                        .prompt(new_state.prompt())
+                        .sample_rate(metadata.sample_rate.0)
+                        .build()
+                        .map_err(whisper::Error::from)?;
+
+                    to_whisper.send(job)?;
                     let now = std::time::Instant::now();
 
                     let transcription = whisper_output

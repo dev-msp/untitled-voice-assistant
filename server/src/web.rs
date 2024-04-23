@@ -7,7 +7,6 @@ use actix_web::{
 };
 use crossbeam::channel::{Receiver, Sender};
 use serde::Serialize;
-
 use voice::{
     app::{command::Command, response::Response, state::Mode},
     audio::Session,
