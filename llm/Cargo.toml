@@ -18,4 +18,5 @@ log = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
+derive_builder = { workspace = true }
 anyhow = "1.0.82"
