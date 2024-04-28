@@ -4,6 +4,7 @@
 
 pub mod app;
 pub mod audio;
+pub mod config;
 pub mod socket;
 pub mod sync;
 pub mod whisper;

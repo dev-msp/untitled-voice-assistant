@@ -28,6 +28,10 @@ webrtc-vad = "0.4.0"
 whisper-rs = { git = "https://github.com/tazz4843/whisper-rs", branch = "master", features = [ "metal", "whisper-cpp-log" ] }
 sttx = { git = "https://github.com/dev-msp/sttx", branch = "main" }
 
+toml = { workspace = true }
+xdg = { workspace = true }
+whisper-rs = { workspace = true }
+sttx = { workspace = true }
 crossbeam = { workspace = true }
 itertools = { workspace = true }
 thiserror = { workspace = true }
