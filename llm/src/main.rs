@@ -1,43 +1,9 @@
-use anyhow::anyhow;
-use clap::{Parser, ValueEnum};
+use clap::Parser;
+use itertools::Itertools;
 use llm::{
     vendor::{self, openai},
     Config,
 };
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum Provider {
-    OpenAi,
-    Groq,
-}
-
-impl Provider {
-    async fn completion(
-        &self,
-        config: &Config,
-        system_message: Option<String>,
-        user_message: String,
-    ) -> Result<openai::compat::Response, anyhow::Error> {
-        match self {
-            Provider::Groq => {
-                let provider = &config.providers.groq;
-                let api_key = provider
-                    .get_api_key()
-                    .await?
-                    .ok_or_else(|| anyhow!("no api key?"))?;
-                vendor::groq::completion(api_key, system_message, user_message).await
-            }
-            Provider::OpenAi => {
-                let provider = &config.providers.openai;
-                let api_key = provider
-                    .get_api_key()
-                    .await?
-                    .ok_or_else(|| anyhow!("no api key?"))?;
-                vendor::openai::completion(api_key, system_message, user_message).await
-            }
-        }
-    }
-}
 
 #[derive(Debug, clap::Parser)]
 #[command(version, about, long_about = None)]
@@ -49,12 +15,13 @@ struct App {
 #[derive(Debug, clap::Subcommand)]
 enum Commands {
     Completion(Completion),
+    ListModels,
 }
 
 #[derive(Debug, clap::Args)]
 struct Completion {
     #[clap(short, long)]
-    provider: Provider,
+    provider: vendor::Provider,
 
     #[clap(short, long)]
     system_message: Option<String>,
@@ -72,12 +39,24 @@ impl Completion {
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
+    env_logger::init();
+
     let app = App::parse();
     let config = Config::read()?;
     match app.command {
         Commands::Completion(c) => {
             let response = c.run(&config).await?;
-            println!("{response}");
+            println!("{}", response.content());
+        }
+        Commands::ListModels => {
+            let models: Vec<_> = vendor::ollama::list_models().await?.into();
+            println!(
+                "{:?}",
+                models
+                    .iter()
+                    .map(|m| (m.name(), m.human_size()))
+                    .collect_vec()
+            );
         }
     }
     Ok(())

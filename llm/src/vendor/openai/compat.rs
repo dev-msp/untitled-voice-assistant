@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 use derive_builder::Builder;
 use itertools::Itertools;
@@ -37,15 +37,27 @@ where
         .model(model)
         .build()?;
 
-    let response: reqwest::Response = reqwest::Client::new()
-        .post(api_base)
-        .bearer_auth(api_key)
-        .json(&req)
-        .send()
-        .await?;
+    Ok(
+        raw_completion(api_base, Some(api_key), &serde_json::to_value(req)?)
+            .await?
+            .json()
+            .await?,
+    )
+}
 
-    let hey: Response = response.json().await?;
-    Ok(hey)
+pub(crate) async fn raw_completion(
+    api_base: &str,
+    api_key: Option<String>,
+    req: &serde_json::Value,
+) -> Result<reqwest::Response, anyhow::Error> {
+    let mut req_builder = reqwest::Client::new().post(api_base);
+    if let Some(api_key) = api_key {
+        req_builder = req_builder.bearer_auth(api_key);
+    }
+
+    let response: reqwest::Response = req_builder.json(req).send().await?;
+
+    Ok(response)
 }
 
 #[derive(Serialize, Deserialize, Builder)]
@@ -89,11 +101,40 @@ where
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Response(serde_json::Value);
+pub struct Response {
+    pub choices: Vec<Choice>,
+    pub created: i64,
+    pub id: String,
+    pub model: String,
+    pub object: String,
+    pub system_fingerprint: String,
+    pub usage: Usage,
 
-impl std::fmt::Display for Response {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+    #[serde(flatten)]
+    pub meta: HashMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Choice {
+    pub finish_reason: String,
+    pub index: i32,
+    pub logprobs: Option<serde_json::Value>,
+    pub message: Message,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Usage {
+    pub completion_time: f32,
+    pub completion_tokens: i32,
+    pub prompt_time: f32,
+    pub prompt_tokens: i32,
+    pub total_time: f32,
+    pub total_tokens: i32,
+}
+
+impl Response {
+    pub fn content(&self) -> String {
+        self.choices[0].message.content.clone()
     }
 }
 
