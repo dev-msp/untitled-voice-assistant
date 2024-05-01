@@ -19,14 +19,19 @@ serde = { version = "1.0.197", features = ["derive"] }
 serde_json = "1.0.115"
 tokio = { version = "1.37.0", features = ["full"] }
 derive_builder = "0.20.0"
+sttx = { git = "https://github.com/dev-msp/sttx", branch = "main" }
+toml = "0.8.12"
+whisper-rs = { git = "https://github.com/tazz4843/whisper-rs", branch = "master", features = [ "metal", "whisper-cpp-log" ] }
+xdg = "2.5.2"
 
 [dependencies]
+llm = { path = "./llm" }
+
 cpal = "0.14.0"
 dasp = { version = "0.11.0", features = ["all"] }
 hound = "3.5.1"
 webrtc-vad = "0.4.0"
-whisper-rs = { git = "https://github.com/tazz4843/whisper-rs", branch = "master", features = [ "metal", "whisper-cpp-log" ] }
-sttx = { git = "https://github.com/dev-msp/sttx", branch = "main" }
+ringbuffer = { version = "0.15.0", features = ["alloc"] }
 
 toml = { workspace = true }
 xdg = { workspace = true }

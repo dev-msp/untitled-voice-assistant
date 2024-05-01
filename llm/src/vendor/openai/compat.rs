@@ -4,6 +4,21 @@ use derive_builder::Builder;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
+use crate::vendor::get_api_key;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Provider {
+    enabled: bool,
+    api_key_command: Vec<String>,
+    default_model: Option<String>,
+}
+
+impl Provider {
+    pub async fn get_api_key(&self) -> anyhow::Result<Option<String>> {
+        get_api_key(&self.api_key_command).await
+    }
+}
+
 pub async fn completion<M>(
     api_base: &'static str,
     api_key: String,

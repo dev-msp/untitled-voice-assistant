@@ -1,16 +1,19 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use serde::{Deserialize, Serialize};
+use serde::{de::Error as _, Deserialize, Serialize};
+
+use crate::vendor::{ollama, openai::compat};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    transcription: Transcription,
-    llm: llm::Config,
+    pub providers: Providers,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Transcription {
-    model_dir: PathBuf,
+pub struct Providers {
+    pub groq: compat::Provider,
+    pub openai: compat::Provider,
+    pub ollama: ollama::Provider,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -31,20 +34,18 @@ pub enum Error {
 impl Config {
     pub fn read() -> Result<Self, Error> {
         let toml = std::fs::read_to_string(Self::path()?)?;
-        let config = toml::from_str(&toml)?;
+        let val: toml::Value = toml::from_str(&toml)?;
+        let table = val
+            .as_table()
+            .ok_or_else(|| Error::Read(toml::de::Error::custom("expected table")))?;
+
+        let cfg = table
+            .get("llm")
+            .ok_or_else(|| Error::Read(toml::de::Error::custom("missing llm")))?;
+
+        let config = toml::from_str(toml::ser::to_string(cfg)?.as_str())?;
+
         Ok(config)
-    }
-
-    pub fn write(&self) -> Result<(), Error> {
-        let toml = toml::to_string_pretty(self)?;
-        std::fs::write(Self::path()?, toml)?;
-
-        Ok(())
-    }
-
-    #[must_use]
-    pub fn model_dir(&self) -> &Path {
-        self.transcription.model_dir.as_path()
     }
 
     fn path() -> Result<PathBuf, Error> {

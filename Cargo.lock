@@ -1470,8 +1470,9 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
+ "toml",
  "tracing",
- "voice",
+ "xdg",
 ]
 
 [[package]]
@@ -2742,6 +2743,7 @@ dependencies = [
  "env_logger",
  "hound",
  "itertools",
+ "llm",
  "log",
  "regex",
  "ringbuffer",
