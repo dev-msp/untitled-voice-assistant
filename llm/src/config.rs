@@ -6,6 +6,7 @@ use crate::vendor::{ollama, openai::compat};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    pub default_system_message: Option<String>,
     pub providers: Providers,
 }
 

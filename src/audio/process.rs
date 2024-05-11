@@ -27,12 +27,9 @@ impl<T> From<SendError<T>> for Error {
     }
 }
 
-pub trait InputSample: cpal::Sample + dasp::Sample + Default {}
-impl<T> InputSample for T where T: cpal::Sample + dasp::Sample + Default {}
-
 pub trait Process {
     type Frame: dasp::Frame + Default;
-    type Input: InputSample;
+    type Input: cpal::Sample + dasp::Sample + Default;
     type Output: MySample;
     type Signal<'a>: Signal<Frame = Self::Frame> + Sized + 'a
     where

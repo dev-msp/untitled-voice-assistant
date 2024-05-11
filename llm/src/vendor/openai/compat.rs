@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 
 use derive_builder::Builder;
 use itertools::Itertools;
@@ -17,40 +17,70 @@ impl Provider {
     pub async fn get_api_key(&self) -> anyhow::Result<Option<String>> {
         get_api_key(&self.api_key_command).await
     }
+
+    pub fn default_model(&self) -> Option<String> {
+        self.default_model.clone()
+    }
 }
 
-pub async fn completion<M>(
+#[derive(Serialize, Deserialize)]
+pub struct ErrorResponse(serde_json::Value);
+
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum FallibleResponse<R> {
+    Success(R),
+    Error(ErrorResponse),
+}
+
+impl<R> From<FallibleResponse<R>> for Result<R, anyhow::Error> {
+    fn from(response: FallibleResponse<R>) -> Self {
+        match response {
+            FallibleResponse::Success(r) => Ok(r),
+            FallibleResponse::Error(err) => Err(err.into()),
+        }
+    }
+}
+
+impl From<ErrorResponse> for anyhow::Error {
+    fn from(err: ErrorResponse) -> Self {
+        anyhow::anyhow!(
+            "API error:\n{}",
+            serde_json::to_string_pretty(&err.0).expect("failed to serialize error response")
+        )
+    }
+}
+
+pub async fn completion(
     api_base: &'static str,
     api_key: String,
-    model: M,
-    system_message: Option<String>,
+    model: String,
+    system_message: String,
     user_message: String,
-) -> Result<Response, anyhow::Error>
-where
-    M: Serialize + Default + Clone,
-{
-    let system_message =
-        system_message.unwrap_or_else(|| "You are a helpful assistant.".to_string());
-
+) -> Result<Response, anyhow::Error> {
     let req = RequestBuilder::default()
         .messages(Chat::start_new(system_message, user_message))
         .model(model)
         .build()?;
 
-    Ok(
-        raw_completion(api_base, Some(api_key), &serde_json::to_value(req)?)
-            .await?
-            .json()
-            .await?,
+    let response: FallibleResponse<Response> = raw_completion(
+        &format!("{api_base}/chat/completions"),
+        Some(api_key),
+        &serde_json::to_value(req)?,
     )
+    .await?
+    .json()
+    .await?;
+
+    response.into()
 }
 
 pub(crate) async fn raw_completion(
-    api_base: &str,
+    url: &str,
     api_key: Option<String>,
     req: &serde_json::Value,
 ) -> Result<reqwest::Response, anyhow::Error> {
-    let mut req_builder = reqwest::Client::new().post(api_base);
+    let mut req_builder = reqwest::Client::new().post(url);
     if let Some(api_key) = api_key {
         req_builder = req_builder.bearer_auth(api_key);
     }
@@ -58,6 +88,31 @@ pub(crate) async fn raw_completion(
     let response: reqwest::Response = req_builder.json(req).send().await?;
 
     Ok(response)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListModelsResponse {
+    // object: String,
+    data: Vec<Model>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Model {
+    id: String,
+    created: i64,
+    owned_by: String,
+}
+
+pub async fn list_models(api_base: &'static str, api_key: String) -> anyhow::Result<Vec<String>> {
+    let response: ListModelsResponse = reqwest::Client::new()
+        .get(format!("{}/models", api_base))
+        .bearer_auth(api_key)
+        .send()
+        .await?
+        .json()
+        .await?;
+
+    Ok(response.data.into_iter().map(|model| model.id).collect())
 }
 
 #[derive(Serialize, Deserialize, Builder)]
@@ -108,10 +163,7 @@ pub struct Response {
     pub model: String,
     pub object: String,
     pub system_fingerprint: String,
-    pub usage: Usage,
-
-    #[serde(flatten)]
-    pub meta: HashMap<String, serde_json::Value>,
+    pub usage: Option<Usage>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -124,11 +176,8 @@ pub struct Choice {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Usage {
-    pub completion_time: f32,
     pub completion_tokens: i32,
-    pub prompt_time: f32,
     pub prompt_tokens: i32,
-    pub total_time: f32,
     pub total_tokens: i32,
 }
 

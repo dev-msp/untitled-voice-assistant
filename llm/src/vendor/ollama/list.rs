@@ -25,8 +25,6 @@ impl Default for Host {
     }
 }
 
-struct Model(String);
-
 #[derive(Debug, Clone, Deserialize)]
 pub struct ListModelsResponse {
     models: Vec<LocalModel>,
@@ -94,11 +92,13 @@ impl LocalModel {
     }
 }
 
-pub async fn list_models() -> anyhow::Result<ListModelsResponse> {
-    let resp = reqwest::Client::new()
+pub async fn list_models() -> anyhow::Result<Vec<String>> {
+    let resp: ListModelsResponse = reqwest::Client::new()
         .get(format!("{OLLAMA_API}/tags"))
         .send()
+        .await?
+        .json()
         .await?;
 
-    Ok(resp.json().await?)
+    Ok(resp.models.into_iter().map(|m| m.name).collect())
 }

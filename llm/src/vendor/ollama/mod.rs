@@ -1,15 +1,18 @@
 mod list;
 
-pub use list::list_models;
-
-const OLLAMA_API: &str = "http://localhost:11434/api";
-
-use std::collections::HashMap;
-
+use chrono::{offset::Local, DateTime};
 use derive_builder::Builder;
 use serde::{Deserialize, Serialize};
 
+use std::collections::HashMap;
+
+use crate::vendor::openai::compat::FallibleResponse;
+
 use super::openai::compat::{self, raw_completion, Chat};
+
+pub use list::list_models;
+
+const OLLAMA_API: &str = "http://localhost:11434/api";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Provider {
@@ -17,6 +20,14 @@ pub struct Provider {
 
     #[serde(flatten, default)]
     host: Host,
+
+    default_model: Option<String>,
+}
+
+impl Provider {
+    pub fn default_model(&self) -> Option<String> {
+        self.default_model.clone()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,24 +87,26 @@ impl Request {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Response {
     message: compat::Message,
+    role: compat::Role,
     created_at: String,
     done: bool,
     eval_count: i32,
     eval_duration: i64,
     load_duration: i64,
     model: String,
-    prompt_eval_count: i32,
-    prompt_eval_duration: i64,
     total_duration: i64,
 
     #[serde(flatten)]
     x_groq: XGroq,
+
+    #[serde(flatten)]
+    rest: HashMap<String, serde_json::Value>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct XGroq {
     #[serde(flatten)]
     id: String,
@@ -108,40 +121,43 @@ impl From<Response> for compat::Response {
                 logprobs: None,
                 message: response.message,
             }],
-            created: response.created_at.parse().unwrap(),
+            created: DateTime::parse_from_rfc3339(&response.created_at)
+                .map(|dt| dt.with_timezone(&Local))
+                .unwrap_or_else(|_| {
+                    log::warn!("failed to parse date: {}", response.created_at);
+                    Local::now()
+                })
+                .timestamp(),
             // TODO make this a uuid or something
             id: response.x_groq.id.clone(),
             model: response.model,
             object: "chat".to_string(),
             system_fingerprint: response.x_groq.id.clone(),
-            usage: compat::Usage {
-                completion_time: response.eval_duration as f32,
+            usage: Some(compat::Usage {
                 completion_tokens: response.eval_count,
-                prompt_time: response.prompt_eval_duration as f32,
-                prompt_tokens: response.prompt_eval_count,
-                total_time: response.total_duration as f32,
-                total_tokens: response.eval_count + response.prompt_eval_count,
-            },
-            meta: HashMap::new(),
+                prompt_tokens: 0,
+                total_tokens: response.eval_count,
+            }),
         }
     }
 }
 
 pub async fn completion(
-    system_message: Option<String>,
+    model: String,
+    system_message: String,
     user_message: String,
 ) -> Result<compat::Response, anyhow::Error> {
-    let system_message =
-        system_message.unwrap_or_else(|| "You are a helpful assistant.".to_string());
     let req = Request::builder()
         .messages(Chat::start_new(system_message, user_message))
+        .model(model)
         .build()?;
     let req_json = serde_json::to_value(req)?;
     log::info!("req_json: {:?}", req_json);
     let api_base = format!("{OLLAMA_API}/chat");
-    let ollama_response: Response = raw_completion(&api_base, None, &req_json)
+    let ollama_response: FallibleResponse<Response> = raw_completion(&api_base, None, &req_json)
         .await?
         .json()
         .await?;
-    Ok(ollama_response.into())
+
+    Ok(Result::from(ollama_response)?.into())
 }

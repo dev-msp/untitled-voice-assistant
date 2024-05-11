@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use super::openai::{self, compat::Response};
 
-const GROQ_CHAT_API: &str = "https://api.groq.com/openai/v1/chat/completions";
+pub(crate) const GROQ_CHAT_API: &str = "https://api.groq.com/openai/v1";
 
 const MIXTRAL: &str = "mixtral-8x7b-32768";
 const LLAMA3_70B: &str = "llama3-70b-8192";
@@ -59,15 +59,9 @@ impl Model {
 
 pub async fn completion(
     api_key: String,
-    system_message: Option<String>,
+    model: String,
+    system_message: String,
     user_message: String,
 ) -> Result<Response, anyhow::Error> {
-    openai::compat::completion(
-        GROQ_CHAT_API,
-        api_key,
-        Model::default(),
-        system_message,
-        user_message,
-    )
-    .await
+    openai::compat::completion(GROQ_CHAT_API, api_key, model, system_message, user_message).await
 }
