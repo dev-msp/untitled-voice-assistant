@@ -37,3 +37,7 @@ voice-client localhost:8088 stop
 ```
 
 The results will be printed to stdout.
+
+## Note
+
+This project is deliberately not licensed for the time being. Issues requesting specific licenses will be closed.
