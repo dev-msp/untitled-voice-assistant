@@ -1,5 +1,5 @@
 [workspace]
- members = [".", "client", "llm", "server"]
+members = [".", "client", "llm", "server"]
 
 [package]
 name = "voice"
