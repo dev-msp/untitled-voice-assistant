@@ -41,8 +41,6 @@
           strictDeps = true;
           doCheck = false;
 
-          cargoExtraArgs = "-p client -p server -p llm";
-
           nativeBuildInputs = [ pkgs.cmake ];
           buildInputs = [
             pkgs.iconv
@@ -50,25 +48,32 @@
           ] ++ darwinBuildInputs;
         };
 
-        my-crate = craneLib.buildPackage (
-          commonArgs
-          // {
-            cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+        buildTarget =
+          name:
+          craneLib.buildPackage (
+            commonArgs
+            // {
+              pname = "voice-${name}";
+              cargoExtraArgs = "-p ${name}";
+              cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
-            # Additional environment variables or build phases/hooks can be set
-            # here *without* rebuilding all dependency crates
-            # MY_CUSTOM_VAR = "some value";
-          }
-        );
+              # Additional environment variables or build phases/hooks can be set
+              # here *without* rebuilding all dependency crates
+              # MY_CUSTOM_VAR = "some value";
+            }
+          );
       in
       {
-        checks = {
-          inherit my-crate;
+        # checks = {
+        #   inherit buildTarget;
+        # };
+
+        packages = {
+          default = (buildTarget "client");
+          client = (buildTarget "client");
+          llm = (buildTarget "llm");
+          server = (buildTarget "server");
         };
-
-        packages.default = my-crate;
-
-        apps.default = flake-utils.lib.mkApp { drv = my-crate; };
 
         devShells.default = craneLib.devShell {
           # Inherit inputs from checks.
