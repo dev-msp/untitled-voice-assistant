@@ -3,6 +3,10 @@ name = "client"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "voice-client"
+path = "./src/main.rs"
+
 [dependencies]
 voice = { path = ".." }
 reqwest = "0.12.4"
