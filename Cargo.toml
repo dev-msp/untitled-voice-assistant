@@ -21,7 +21,7 @@ tokio = { version = "1.37.0", features = ["full"] }
 derive_builder = "0.20.0"
 sttx = { git = "https://github.com/dev-msp/sttx", branch = "main" }
 toml = "0.8.12"
-whisper-rs = { git = "https://github.com/tazz4843/whisper-rs", branch = "master", features = [ "metal", "whisper-cpp-log" ] }
+whisper-rs = { git = "https://github.com/tazz4843/whisper-rs", rev = "8452274", features = [ "metal", "whisper-cpp-log" ] }
 xdg = "2.5.2"
 
 [dependencies]
