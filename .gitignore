@@ -1,1 +1,7 @@
-/target
+/result
+
+# direnv
+.direnv
+
+# pre-commit
+.pre-commit-config.yaml

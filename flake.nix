@@ -3,18 +3,12 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
-
-    crane = {
-      url = "github:ipetkov/crane";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-
+    crane.url = "github:ipetkov/crane";
     flake-utils.url = "github:numtide/flake-utils";
   };
 
   outputs =
     {
-      self,
       nixpkgs,
       crane,
       flake-utils,
@@ -56,28 +50,19 @@
               pname = "voice-${name}";
               cargoExtraArgs = "-p ${name}";
               cargoArtifacts = craneLib.buildDepsOnly commonArgs;
-
-              # Additional environment variables or build phases/hooks can be set
-              # here *without* rebuilding all dependency crates
-              # MY_CUSTOM_VAR = "some value";
             }
           );
       in
       {
-        # checks = {
-        #   inherit buildTarget;
-        # };
-
         packages = {
           default = (buildTarget "client");
           client = (buildTarget "client");
           llm = (buildTarget "llm");
           server = (buildTarget "server");
         };
-
         devShells.default = craneLib.devShell {
           # Inherit inputs from checks.
-          checks = self.checks.${system};
+          # checks = self.checks.${system};
         };
       }
     );
