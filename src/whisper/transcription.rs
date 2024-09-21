@@ -43,7 +43,7 @@ impl Model {
             Model::Base => "base.en",
             Model::Small => "small.en",
             Model::Medium => "medium",
-            Model::Large => "large",
+            Model::Large => "large-v3-turbo",
         };
         format!("ggml-{base_name}.bin")
     }
