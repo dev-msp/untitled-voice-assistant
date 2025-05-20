@@ -42,7 +42,7 @@ pub enum Error {
     Sync,
 
     #[error("try to eliminate this")]
-    CatchAll,
+    ThreadPanic(String),
 }
 
 pub struct Recording<S, RS, RE = Error>
@@ -57,11 +57,10 @@ where
     receiving_handle: thread::JoinHandle<RS>,
 }
 
-impl<S, RS, RE> Recording<S, RS, RE>
+impl<S, RS> Recording<S, RS, Error>
 where
     S: MySample,
-    RS: Send + Into<Vec<f32>>,
-    RE: Debug + Display + Send + 'static,
+    RS: Send + Into<Vec<f32>> + 'static,
 {
     #[tracing::instrument(skip(self))]
     pub fn start(&self) {
@@ -72,34 +71,67 @@ where
 
     pub fn stop(self) -> Result<(StreamConfig, Vec<f32>), Error> {
         self.controller.stop();
-        let metadata = Self::join_handle(self.handle)
-            .map_err(|e| {
-                log::error!("Error joining recording thread: {}", e);
-                Error::Sync
-            })?
-            .map_err(|e| {
-                log::error!("Error completing recording: {}", e);
-                Error::CatchAll
-            })?;
+        // The handle's thread returns Result<StreamConfig, Error>
+        let metadata_result = Self::join_handle(self.handle)?; // Result<Result<StreamConfig, Error>, Error> -> Result<StreamConfig, Error>
+        let metadata = metadata_result?; // Handle the inner Result
 
-        let audio = Self::join_handle(self.receiving_handle)?.into();
-        Ok((metadata, audio))
+        // The receiving_handle's thread returns RS
+        let audio = Self::join_handle_rs(self.receiving_handle)?;
+
+        Ok((metadata, audio.into()))
     }
 
-    fn join_handle<T>(handle: thread::JoinHandle<T>) -> Result<T, Error> {
+    // This function joins a thread handle that returns Result<T, Error_Returned_By_Thread>
+    fn join_handle<T, ThreadErr>(
+        handle: thread::JoinHandle<Result<T, ThreadErr>>,
+    ) -> Result<Result<T, ThreadErr>, Error>
+    // Returns the inner Result, or an Error if joining/panic
+    where
+        T: Send + 'static,
+        ThreadErr: Debug + Display + Send + 'static,
+    {
         match handle.join() {
-            Ok(inner) => Ok(inner),
+            Ok(thread_result) => {
+                // Thread completed. Pass through the result it returned.
+                Ok(thread_result)
+            }
             Err(e) => {
-                let inner: Box<RE> = e.downcast::<RE>().map_err(|_| Error::Sync)?;
-                log::error!("Error joining thread: {}", inner);
-                Err(Error::CatchAll)
+                // Thread panicked. Convert panic payload to Error::ThreadPanic
+                let panic_message = if let Some(s) = e.downcast_ref::<String>() {
+                    s.clone()
+                } else if let Some(s) = e.downcast_ref::<&str>() {
+                    (*s).to_string()
+                } else {
+                    format!("Unknown panic payload: {e:?}")
+                };
+                log::error!("Recording thread panicked: {}", panic_message);
+                Err(Error::ThreadPanic(panic_message))
+            }
+        }
+    }
+
+    // This function joins a thread handle that returns T
+    fn join_handle_rs<T: Send + 'static>(handle: thread::JoinHandle<T>) -> Result<T, Error> {
+        match handle.join() {
+            Ok(result) => Ok(result),
+            Err(e) => {
+                // Thread panicked.
+                let panic_message = if let Some(s) = e.downcast_ref::<String>() {
+                    s.clone()
+                } else if let Some(s) = e.downcast_ref::<&str>() {
+                    (*s).to_string()
+                } else {
+                    format!("Unknown panic payload: {e:?}")
+                };
+                log::error!("Recording sink thread panicked: {}", panic_message);
+                Err(Error::ThreadPanic(panic_message))
             }
         }
     }
 
     pub fn controlled(
         session: Session,
-        node: crate::sync::ProcessNode<S, RS>,
+        node: crate::sync::ProcessNode<process::AudioMessage<S>, RS>,
     ) -> Result<Recording<S, RS, Error>, Error>
     where
         S: MySample,
@@ -111,7 +143,8 @@ where
 
         let (sink_send, sink_handle) = node.run();
 
-        let handle = thread::spawn(move || {
+        let handle = thread::spawn(move || -> Result<StreamConfig, Error> {
+            // Explicit return type
             {
                 let (device, supported_config) = session
                     .supported_configs()?
@@ -140,11 +173,7 @@ where
 
                 c2.wait_for(RecordState::Stopped);
                 Ok(cfg)
-            }
-            .map_err(|e| {
-                log::error!("Error attempting to record from input device: {}", e);
-                e
-            })
+            } // .map_err is removed here, error is handled by ?
         });
 
         Ok(Recording {

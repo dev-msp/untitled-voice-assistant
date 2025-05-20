@@ -12,18 +12,15 @@ use self::{
     response::Response,
 };
 use crate::{
-    audio::{Recording, RecordingError, Session},
+    audio::{self, AudioMessage, Recording, RecordingError, Session},
     sync,
     whisper::{self, transcription::Job},
 };
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("Try to eliminate this")]
-    CatchAll,
-
-    #[error("Error: {0}")]
-    WithMessage(String),
+    #[error("No transcription result")]
+    NoTranscriptionResult,
 
     #[error("Send error")]
     Send,
@@ -41,12 +38,6 @@ pub enum Error {
 impl<T> From<SendError<T>> for Error {
     fn from(_: SendError<T>) -> Self {
         Self::Send
-    }
-}
-
-impl Error {
-    fn message<S: ToString + ?Sized>(msg: &S) -> Self {
-        Self::WithMessage(msg.to_string())
     }
 }
 
@@ -115,9 +106,15 @@ impl Daemon {
                 Command::Start(session) => {
                     assert!(new_state.running());
 
-                    let new_rec = match Recording::<_, _, Error>::controlled(
+                    let new_rec = match Recording::<_, _, audio::RecordingError>::controlled(
                         session.clone(),
-                        sync::ProcessNode::new(|it| it.collect::<Vec<_>>()),
+                        sync::ProcessNode::new(|it| {
+                            it.map(|msg| match msg {
+                                AudioMessage::Data(data) => data,
+                                AudioMessage::Error(e) => panic!("{e}"),
+                            })
+                            .collect::<Vec<_>>()
+                        }),
                     ) {
                         Ok(new_rec) => new_rec,
                         Err(e) => {
@@ -162,7 +159,7 @@ impl Daemon {
                     let transcription = whisper_output
                         .iter()
                         .next()
-                        .ok_or(Error::message("No transcription"))?;
+                        .ok_or(Error::NoTranscriptionResult)?;
 
                     match transcription {
                         Ok(t) => {
@@ -209,7 +206,15 @@ impl Daemon {
         // Done responding
         drop(responses);
 
-        tx_worker.join().unwrap()?;
+        if let Err(e) = tx_worker.join() {
+            log::error!(
+                "Transcription worker thread panicked: {}",
+                e.downcast_ref::<String>()
+                    .map_or("Unknown panic payload", |v| v)
+            );
+        } else {
+            log::debug!("Transcription worker thread finished");
+        }
 
         // remove socket
         if let Some(ref p) = self.config.socket_path {
