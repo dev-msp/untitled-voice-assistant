@@ -206,7 +206,15 @@ impl Daemon {
         // Done responding
         drop(responses);
 
-        tx_worker.join().unwrap()?;
+        if let Err(e) = tx_worker.join() {
+            log::error!(
+                "Transcription worker thread panicked: {}",
+                e.downcast_ref::<String>()
+                    .map_or("Unknown panic payload", |v| v)
+            );
+        } else {
+            log::debug!("Transcription worker thread finished");
+        }
 
         // remove socket
         if let Some(ref p) = self.config.socket_path {
