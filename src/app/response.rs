@@ -64,3 +64,72 @@ impl std::fmt::Display for Response {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json;
+
+    #[test]
+    fn test_serialize_ack() {
+        let response = Response::Ack(12345);
+        let expected = r#"{"type":"ack","data":12345}"#;
+        let serialized = serde_json::to_string(&response).unwrap();
+        assert_eq!(serialized, expected);
+    }
+
+    #[test]
+    fn test_serialize_nil() {
+        let response = Response::Nil;
+        let expected = r#"{"type":"nil"}"#;
+        let serialized = serde_json::to_string(&response).unwrap();
+        assert_eq!(serialized, expected);
+    }
+
+    #[test]
+    fn test_serialize_error() {
+        let response = Response::Error("Something went wrong".to_string());
+        let expected = r#"{"type":"error","data":"Something went wrong"}"#;
+        let serialized = serde_json::to_string(&response).unwrap();
+        assert_eq!(serialized, expected);
+    }
+
+    #[test]
+    fn test_serialize_exit() {
+        let response = Response::Exit(1);
+        let expected = r#"{"type":"exit","data":1}"#;
+        let serialized = serde_json::to_string(&response).unwrap();
+        assert_eq!(serialized, expected);
+    }
+
+    #[test]
+    fn test_serialize_new_mode() {
+        let response = Response::NewMode(Mode::Standard);
+        let expected = r#"{"type":"new_mode","data":{"type":"standard"}}"#;
+        let serialized = serde_json::to_string(&response).unwrap();
+        assert_eq!(serialized, expected);
+    }
+
+    #[test]
+    fn test_serialize_transcription_with_content() {
+        let response = Response::Transcription {
+            content: Some("hello world".to_string()),
+            mode: Mode::Standard,
+        };
+        let expected = r#"{"type":"transcription","data":{"content":"hello world","mode":{"type":"standard"}}}"#;
+        let serialized = serde_json::to_string(&response).unwrap();
+        assert_eq!(serialized, expected);
+    }
+
+    #[test]
+    fn test_serialize_transcription_without_content() {
+        let response = Response::Transcription {
+            content: None,
+            mode: Mode::LiveTyping,
+        };
+        let expected =
+            r#"{"type":"transcription","data":{"content":null,"mode":{"type":"live_typing"}}}"#;
+        let serialized = serde_json::to_string(&response).unwrap();
+        assert_eq!(serialized, expected);
+    }
+}
