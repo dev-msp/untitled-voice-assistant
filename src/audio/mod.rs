@@ -4,6 +4,8 @@ mod controller;
 mod process;
 mod recording;
 
+pub use process::AudioMessage;
+
 pub use recording::{Error as RecordingError, Recording, Session};
 
 use cpal::{

@@ -38,6 +38,7 @@ pub trait Process {
     fn config(&self) -> &cpal::StreamConfig;
 
     fn send(&self, sample: Self::Output) -> Result<(), Error>;
+    fn send_error(&self, error: Error) -> Result<(), Error>;
 
     fn interpolator() -> Sinc<[Self::Frame; 128]>;
 
@@ -56,12 +57,12 @@ pub trait Process {
         )
     }
 
-    fn write_input_data(&mut self, input: &[Self::Input]) -> Result<(), Error> {
+    fn write_input_data(&mut self, input: &[Self::Input]) {
         for sample in self.mono_samples(input).collect_vec() {
-            self.send(sample)?;
+            self.send(sample)
+                .or_else(|e| self.send_error(e))
+                .expect("Could not send message to audio thread");
         }
-
-        Ok(())
     }
 }
 
@@ -71,27 +72,34 @@ pub fn read_from_device<P: Process + Send + Sync + 'static>(
 ) -> Result<Stream, Error> {
     Ok(device.build_input_stream(
         &processor.config().clone(),
-        move |data, _| {
-            processor
-                .write_input_data(data)
-                .expect("failed to write data");
-        },
+        move |data, _| processor.write_input_data(data),
         |err| {
             log::trace!("an error occurred on stream: {}", err);
         },
     )?)
 }
 
-pub struct Processor<O, const CHANNELS: usize> {
+pub enum AudioMessage<O>
+where
+    O: MySample,
+{
+    Data(O),
+    Error(Error),
+}
+
+pub struct Processor<O, const CHANNELS: usize>
+where
+    O: MySample,
+{
     config: cpal::StreamConfig,
-    sink: Sender<O>,
+    sink: Sender<AudioMessage<O>>,
 }
 
 impl<O, const CHANNELS: usize> Processor<O, CHANNELS>
 where
     O: MySample,
 {
-    pub fn new(sink: Sender<O>, config: cpal::StreamConfig) -> Self {
+    pub fn new(sink: Sender<AudioMessage<O>>, config: cpal::StreamConfig) -> Self {
         Self { config, sink }
     }
 }
@@ -128,7 +136,11 @@ impl<O: MySample> Process for Processor<O, 1> {
     }
 
     fn send(&self, sample: O) -> Result<(), Error> {
-        Ok(self.sink.send(sample)?)
+        Ok(self.sink.send(AudioMessage::Data(sample))?)
+    }
+
+    fn send_error(&self, error: Error) -> Result<(), Error> {
+        Ok(self.sink.send(AudioMessage::Error(error))?)
     }
 }
 
@@ -168,6 +180,10 @@ impl<O: MySample> Process for Processor<O, 2> {
     }
 
     fn send(&self, sample: O) -> Result<(), Error> {
-        Ok(self.sink.send(sample)?)
+        Ok(self.sink.send(AudioMessage::Data(sample))?)
+    }
+
+    fn send_error(&self, error: Error) -> Result<(), Error> {
+        Ok(self.sink.send(AudioMessage::Error(error))?)
     }
 }

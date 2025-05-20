@@ -23,9 +23,6 @@ pub enum Error {
 
     #[error("Send error")]
     Send,
-
-    #[error("Try to eliminate this")]
-    CatchAll,
 }
 
 impl<T> From<crossbeam::channel::SendError<T>> for Error {
@@ -71,7 +68,7 @@ impl Whisper {
             Ok(0) => {}
             Ok(n) => return Err(WhisperError::GenericError(n)),
             Err(e) => return Err(e),
-        };
+        }
 
         let segments = state.full_n_segments()?;
 
@@ -135,12 +132,11 @@ pub fn transcription_worker(
                 let entry = whispers.entry(job.model());
                 if let Entry::Vacant(e) = entry {
                     log::info!("Creating new whisper instance for model: {:?}", job.model());
-                    // &job.model().filename()
                     let model_path = base_dir.join(job.model().filename());
                     e.insert(Whisper::new(
                         model_path.to_string_lossy().to_string().as_str(),
                     )?);
-                };
+                }
                 let whisper = whispers.get(&job.model()).expect("Whisper not found");
                 let results = whisper
                     .transcribe_audio(&job)

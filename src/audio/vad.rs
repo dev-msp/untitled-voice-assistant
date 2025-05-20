@@ -1,5 +1,5 @@
 use std::{
-    iter::{repeat, Chain, Copied, Repeat, Take},
+    iter::{Chain, Copied, RepeatN},
     slice::Iter,
     time::Duration,
 };
@@ -128,11 +128,14 @@ impl<'a> AsRef<[i16]> for Buffer<'a> {
 
 impl<'a> IntoIterator for Buffer<'a> {
     type Item = i16;
-    type IntoIter = Chain<Copied<Iter<'a, i16>>, Take<Repeat<i16>>>;
+    type IntoIter = Chain<Copied<Iter<'a, i16>>, RepeatN<i16>>;
 
     fn into_iter(self) -> Self::IntoIter {
         let fill = self.size() - self.data.len();
-        self.data.iter().copied().chain(repeat(0).take(fill))
+        self.data
+            .iter()
+            .copied()
+            .chain(std::iter::repeat_n(0_i16, fill))
     }
 }
 
