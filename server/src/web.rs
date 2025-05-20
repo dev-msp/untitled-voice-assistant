@@ -3,10 +3,11 @@ use actix_web::{
     middleware::Logger,
     post,
     web::{self, Data},
-    App, HttpRequest, HttpResponse, HttpServer, Responder,
+    App, HttpRequest, HttpResponse, HttpServer, Responder, get,
 };
 use crossbeam::channel::{Receiver, Sender};
 use serde::Serialize;
+use std::fs;
 use voice::{
     app::{command::Command, response::Response, state::Mode},
     audio::Session,
@@ -65,6 +66,19 @@ async fn set_mode(app: AppChannel, mode: web::Json<Mode>) -> impl Responder {
     ApiResponder { content: response }
 }
 
+#[get("/")]
+async fn serve_index_page() -> impl Responder {
+    match fs::read_to_string("server/templates/index.html") {
+        Ok(content) => HttpResponse::Ok()
+            .content_type("text/html")
+            .body(content),
+        Err(e) => {
+            log::error!("Failed to read index.html: {}", e);
+            HttpResponse::NotFound().finish()
+        }
+    }
+}
+
 pub struct Server {
     addr: (String, u16),
     commands: Sender<Command>,
@@ -96,7 +110,10 @@ impl Server {
                     self.responses.clone(),
                 )));
 
-            App::new().wrap(Logger::default()).service(voice)
+            App::new()
+                .wrap(Logger::default())
+                .service(serve_index_page) // Add this line
+                .service(voice)
         })
         .bind(&self.addr)?;
 
@@ -128,4 +145,31 @@ pub fn parse_addr_option(s: &str) -> Result<(String, u16), AddressParseError> {
         .map_err(AddressParseError::ParsePort)?;
 
     Ok((host.to_string(), port))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use actix_web::{test, App, http::header::ContentType};
+
+    #[actix_web::test]
+    async fn test_serve_index_page_success() {
+        let expected_body = "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n    <meta charset=\"UTF-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n    <title>Minimal Webpage</title>\n</head>\n<body>\n    <h1>Hello from the server!</h1>\n</body>\n</html>\n";
+
+        let app = test::init_service(
+            App::new().service(serve_index_page)
+        ).await;
+
+        let req = test::TestRequest::get().uri("/").to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert!(resp.status().is_success(), "Response status should be 2xx");
+        
+        let content_type = resp.headers().get(actix_web::http::header::CONTENT_TYPE).expect("Content-Type header should be present");
+        assert_eq!(content_type, ContentType::html().to_string(), "Content-Type should be text/html");
+
+        let body_bytes = test::read_body(resp).await;
+        let body_str = String::from_utf8(body_bytes.to_vec()).expect("Response body should be valid UTF-8");
+        assert_eq!(body_str, expected_body, "Response body should match index.html content");
+    }
 }
