@@ -62,7 +62,9 @@
         };
         devShells.default = craneLib.devShell {
           # Inherit inputs from checks.
-          # checks = self.checks.${system};
+          packages = (with commonArgs; nativeBuildInputs ++ buildInputs) ++ [
+            pkgs.rust-analyzer
+          ];
         };
       }
     );
