@@ -129,7 +129,7 @@ impl From<StrategyOpt> for whisper_rs::SamplingStrategy {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, PartialEq, thiserror::Error)]
 pub enum StrategyParseError {
     #[error("'{0}' is not among the supported strategies: 'greedy', 'beam'")]
     Unsupported(String),
@@ -223,20 +223,29 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "best_of must be at least 1")]
     fn test_bad_beam_parse() {
-        parse_strategy("beam:0").unwrap();
+        let result = parse_strategy("beam:0");
+        assert_eq!(
+            result.unwrap_err(),
+            StrategyParseError::AtLeastOne("beam_size".to_string())
+        );
     }
 
     #[test]
-    #[should_panic(expected = "best_of must be at least 1")]
-    fn test_bad_greedy_parse() {
-        parse_strategy("greedy:0").unwrap();
-    }
-
-    #[test]
-    #[should_panic(expected = "invalid strategy")]
     fn test_bad_parse() {
-        parse_strategy("berm").unwrap();
+        let result = parse_strategy("berm");
+        assert_eq!(
+            result.unwrap_err(),
+            StrategyParseError::Unsupported("berm".to_string())
+        );
+    }
+
+    #[test]
+    fn test_bad_greedy_parse() {
+        let result = parse_strategy("greedy:0");
+        assert_eq!(
+            result.unwrap_err(),
+            StrategyParseError::AtLeastOne("best_of".to_string())
+        );
     }
 }
