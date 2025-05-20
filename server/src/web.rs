@@ -1,5 +1,7 @@
 use actix_web::{
     body::BoxBody,
+    get,
+    http::header::ContentType,
     middleware::Logger,
     post,
     web::{self, Data},
@@ -7,6 +9,7 @@ use actix_web::{
 };
 use crossbeam::channel::{Receiver, Sender};
 use serde::Serialize;
+use std::fs;
 use voice::{
     app::{command::Command, response::Response, state::Mode},
     audio::Session,
@@ -65,6 +68,19 @@ async fn set_mode(app: AppChannel, mode: web::Json<Mode>) -> impl Responder {
     ApiResponder { content: response }
 }
 
+#[get("/")]
+async fn serve_index_page() -> impl Responder {
+    match fs::read_to_string("../server/templates/index.html") {
+        Ok(content) => HttpResponse::Ok()
+            .content_type(ContentType::html())
+            .body(content),
+        Err(e) => {
+            log::error!("Failed to read index.html: {}", e);
+            HttpResponse::NotFound().finish()
+        }
+    }
+}
+
 pub struct Server {
     addr: (String, u16),
     commands: Sender<Command>,
@@ -96,7 +112,10 @@ impl Server {
                     self.responses.clone(),
                 )));
 
-            App::new().wrap(Logger::default()).service(voice)
+            App::new()
+                .wrap(Logger::default())
+                .service(serve_index_page) // Add this line
+                .service(voice)
         })
         .bind(&self.addr)?;
 
@@ -128,4 +147,34 @@ pub fn parse_addr_option(s: &str) -> Result<(String, u16), AddressParseError> {
         .map_err(AddressParseError::ParsePort)?;
 
     Ok((host.to_string(), port))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use actix_web::{http::header::ContentType, test, App};
+
+    #[actix_web::test]
+    async fn test_serve_index_page_success() {
+        let app = test::init_service(App::new().service(serve_index_page)).await;
+
+        let req = test::TestRequest::get().uri("/").to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(resp.status(), actix_web::http::StatusCode::OK);
+
+        let content_type = resp
+            .headers()
+            .get(actix_web::http::header::CONTENT_TYPE)
+            .expect("Response should have a content type");
+
+        assert_eq!(
+            content_type.to_str().unwrap().to_owned(),
+            ContentType::html().to_string(),
+            "Content-Type should be text/html"
+        );
+
+        let body_bytes = test::read_body(resp).await;
+        assert!(String::from_utf8(body_bytes.to_vec()).is_ok());
+    }
 }
