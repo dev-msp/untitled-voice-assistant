@@ -8,7 +8,7 @@ use crossbeam::channel::{unbounded, Receiver, SendError, Sender};
 use sttx::IteratorExt;
 
 use self::{
-    command::{CmdStream, Command},
+    command::{CmdStream, Plumbing},
     response::Response,
 };
 use crate::{
@@ -43,7 +43,7 @@ impl<T> From<SendError<T>> for Error {
 
 pub struct Daemon {
     config: DaemonInit,
-    state: state::State,
+    state: state::RecordingState,
 }
 
 #[derive(Debug, clap::Args)]
@@ -76,7 +76,7 @@ impl Daemon {
     pub fn new(config: DaemonInit) -> Self {
         Self {
             config,
-            state: state::State::default(),
+            state: state::RecordingState::default(),
         }
     }
 
@@ -85,7 +85,7 @@ impl Daemon {
     #[allow(clippy::too_many_lines)]
     pub fn run_loop(
         &mut self,
-        commands: Receiver<Command>,
+        commands: Receiver<Plumbing>,
         responses: Sender<Response>,
     ) -> Result<bool, Error> {
         let (to_whisper, from_recordings) = unbounded();
@@ -103,7 +103,7 @@ impl Daemon {
             };
 
             match command {
-                Command::Start(session) => {
+                Plumbing::Start(session) => {
                     assert!(new_state.running());
 
                     let new_rec = match Recording::<_, _, audio::RecordingError>::controlled(
@@ -134,7 +134,7 @@ impl Daemon {
                     log::debug!("Successfully sent ACK");
                 }
 
-                Command::Stop => {
+                Plumbing::Stop => {
                     assert!(rec.is_some());
                     assert!(!new_state.running());
 
@@ -187,15 +187,15 @@ impl Daemon {
                         }
                     }
                 }
-                Command::Reset => {
+                Plumbing::Reset => {
                     log::info!("Resetting");
                     return Ok(true);
                 }
-                c @ Command::Mode(_) => {
+                c @ Plumbing::Mode(_) => {
                     assert!(!new_state.running());
                     responses.send(c.as_response().unwrap_or_else(Response::ack))?;
                 }
-                Command::Respond(response) => {
+                Plumbing::Respond(response) => {
                     log::info!("Responding with: {:?}", response);
                     responses.send(response.clone())?;
                 }

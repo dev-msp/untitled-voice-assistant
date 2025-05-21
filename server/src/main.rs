@@ -46,25 +46,11 @@ async fn run_web_server(app: ServeDaemonOpts) -> std::io::Result<bool> {
     let (commands_out, commands_in) = crossbeam::channel::bounded(1);
     let (responses_out, responses_in) = crossbeam::channel::bounded(1);
 
-    // NOTES
-    //
-    // can ApiCommand just map to Command?
-    //
-    // OR rather, are they just named poorly?
-    //
-    // meaning Command is better thought of as a set of low-level operations in the "loosest"
-    // domain within the system
-    //
-    // consequently, APIs are built on this, and so on, as needed and as is practical within the
-    // objective of properly expressing the solution in terms of its concrete domain.
-    //
-    // the following has implications for:
-    // - struct naming
-    // - domain modeling
-    // - command/response mapping
-    //
-    let (api_commands_out, api_commands_in) = crossbeam::channel::bounded(1);
-    let (api_responses_out, api_responses_in) = crossbeam::channel::bounded(1);
+    // NOTES cleanup: The inline notes questioned the naming and separation of Commands.
+    // The approach taken here is to use a single set of channels to the daemon,
+    // where the daemon's Command enum handles all requests from the web layer.
+    // The ApiCommand/ApiResponse separation previously in web.rs is removed,
+    // and all web requests needing daemon interaction now use AppChannel.
 
     let addr = app.serve_addr();
     let handle = spawn_blocking(move || {
@@ -74,12 +60,14 @@ async fn run_web_server(app: ServeDaemonOpts) -> std::io::Result<bool> {
     });
 
     // What does the plan say to do here?
+    // Plan (from audio.md) implies daemon handles new command.
+    // This structure passes daemon communication channels to web server.
     let server = web::Server::new(
         addr,
         commands_out,
         responses_in,
-        api_commands_out,
-        api_responses_in,
+        // api_commands_out, // removed
+        // api_responses_in, // removed
     );
     let server_handle = server.run();
 

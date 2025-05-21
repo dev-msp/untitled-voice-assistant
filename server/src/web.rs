@@ -9,10 +9,15 @@ use actix_web::{
 };
 use crossbeam::channel::{Receiver, Sender};
 use serde::Serialize;
-use std::fs;
+use std::{fs, io};
+use tokio::{spawn, task::JoinHandle};
 use voice::{
-    app::{command::Command, response::Response, state::Mode},
+    app::{command::Plumbing, response::Response, state::Mode},
     audio::Session,
+    // OPERATIVE NOTE:
+    // Assume Plumbing::Transcribe variant and required structs like TranscriptionParams
+    // and associated response handling are defined elsewhere (e.g., in voice::app::command)
+    // voice::app::command::TranscriptionParams,
 };
 
 struct ApiResponder<T> {
@@ -26,87 +31,97 @@ impl<T: Serialize> Responder for ApiResponder<T> {
         HttpResponse::Ok().json(self.content)
     }
 }
-type AppChannel = web::Data<AppEvents>;
+use std::marker::Send;
 
-struct AppEvents(Sender<Command>, Receiver<Response>);
+// Represents anything that can send commands (In) and receive responses (Out).
+// This captures the core pattern used to communicate with the application backend.
+trait EventLoop<In, Out>
+where
+    In: Send + 'static, // Commands must be sendable across threads
+    Out: Send + 'static,
+{
+    type Error: std::error::Error;
 
-impl AppEvents {
+    fn start(self) -> JoinHandle<Result<(), Self::Error>>;
+
+    // Note: specific command methods like `start`, `stop`, `mode`
+    // are specific implementations built on top of this general request pattern.
+    // They belong on the implementing struct (like AppEvents), not the trait.
+}
+
+struct AppEvents<In, Out>(Sender<In>, Receiver<Out>);
+
+type AppChannel<In, Out> = web::Data<AppEvents<In, Out>>;
+
+impl AppEvents<Plumbing, Response> {
     fn start(&self, session: Session) -> Response {
-        self.request(Command::Start(session))
+        self.request(Plumbing::Start(session))
     }
 
     fn stop(&self) -> Response {
-        self.request(Command::Stop)
+        self.request(Plumbing::Stop)
     }
 
     fn mode(&self, mode: Mode) -> Response {
-        self.request(Command::Mode(mode))
+        self.request(Plumbing::Mode(mode))
     }
 
-    fn request(&self, cmd: Command) -> Response {
-        self.0.send(cmd).unwrap();
-        self.1.recv().unwrap()
+    // Placeholder for transcribe command - requires updating voice::app::command
+    // fn transcribe(&self, audio_data: Vec<u8>, params: TranscriptionParams) -> Response {
+    //     self.request(Plumbing::Transcribe { audio_data, params })
+    // }
+
+    fn request(&self, cmd: Plumbing) -> Response {
+        self.0.send(cmd).unwrap(); // In a real app, handle send errors
+        self.1.recv().unwrap() // In a real app, handle recv errors
     }
 }
 
 #[post("/start")]
-async fn start(app: AppChannel, session: web::Json<Session>) -> impl Responder {
+async fn start(app: AppChannel<Plumbing, Response>, session: web::Json<Session>) -> impl Responder {
     let response = app.start(session.into_inner());
     ApiResponder { content: response }
 }
 
 #[post("/stop")]
-async fn stop(app: AppChannel) -> impl Responder {
+async fn stop(app: AppChannel<Plumbing, Response>) -> impl Responder {
     let response = app.stop();
     ApiResponder { content: response }
 }
 
 #[post("/mode")]
-async fn set_mode(app: AppChannel, mode: web::Json<Mode>) -> impl Responder {
+async fn set_mode(app: AppChannel<Plumbing, Response>, mode: web::Json<Mode>) -> impl Responder {
     let response = app.mode(mode.into_inner());
     ApiResponder { content: response }
 }
 
-pub enum ApiCommand {
-    Transcribe(String),
-}
+// ApiCommand/ApiResponse and associated impls/structs removed based on inline notes
+// suggesting a single command/response channel to the daemon.
+// fn transcribe handler updated to use AppChannel.
 
-pub enum ApiResponse {
-    Transcription(String),
-}
-
-impl From<ApiResponse> for ApiResponder<String> {
-    fn from(response: ApiResponse) -> Self {
-        match response {
-            ApiResponse::Transcription(s) => Self { content: s },
-        }
-    }
-}
-
-type ApiChannel = web::Data<ApiEvents>;
-
-struct ApiEvents(Sender<ApiCommand>, Receiver<ApiResponse>);
-
-impl ApiEvents {
-    fn transcribe(&self, content: String) -> ApiResponse {
-        self.request(ApiCommand::Transcribe(content))
-    }
-
-    fn request(&self, cmd: ApiCommand) -> ApiResponse {
-        self.0.send(cmd).unwrap();
-        self.1.recv().unwrap()
-    }
-}
-
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+// #[derive(Debug, serde::Serialize, serde::Deserialize)] // Assuming this struct is still relevant for the request body
 struct TranscribeRequest {
-    content: String,
+    content: String, // This probably needs to be adjusted for multipart file upload
+    // Add fields for transcription parameters based on audio.md point 6
+    model: Option<voice::whisper::transcription::Model>,
+    sample_rate: Option<u32>,
+    prompt: Option<String>,
 }
 
 #[post("/transcribe")]
-async fn transcribe(app: ApiChannel, req: web::Json<TranscribeRequest>) -> impl Responder {
-    let response = app.transcribe(req.into_inner().content);
-    ApiResponder::from(response)
+// Signature changed to use AppChannel
+// The body would need significant changes to handle multipart and call app.transcribe
+async fn transcribe(
+    _app: AppChannel<Plumbing, Response>,
+    _req: web::Json<serde_json::Value>,
+) -> impl Responder {
+    // Using Value as a placeholder for the complex request
+    // let audio_data = ... extract from multipart request ...
+    // let params = ... extract params from multipart request ...
+    // let response = app.transcribe(audio_data, params); // Requires app.transcribe and Plumbing::Transcribe
+    // ApiResponder { content: response } // Assuming Response::Transcription is used
+    log::warn!("transcribe endpoint is a placeholder and needs multipart implementation");
+    HttpResponse::NotImplemented().finish() // Return a placeholder response
 }
 
 #[get("/")]
@@ -122,53 +137,72 @@ async fn serve_index_page() -> impl Responder {
     }
 }
 
-pub struct Server {
+#[derive(Debug, Clone)]
+pub struct Server<In, Out> {
     addr: (String, u16),
-    commands: Sender<Command>,
-    responses: Receiver<Response>,
-    apiCommands: Sender<ApiCommand>,
-    apiResponses: Receiver<ApiResponse>,
+    input: Sender<In>,
+    output: Receiver<Out>,
 }
 
-impl Server {
+impl<In, Out> EventLoop<In, Out> for Server<In, Out>
+where
+    In: std::marker::Send + Clone + 'static,
+    Out: std::marker::Send + Clone + 'static,
+{
+    type Error = std::io::Error;
+
+    fn start(self) -> JoinHandle<Result<(), Self::Error>> {
+        spawn(async move {
+            let addr = self.addr.clone();
+            let server = HttpServer::new(move || {
+                let scope = self.voice_scope();
+                App::new()
+                    .wrap(Logger::default())
+                    .service(serve_index_page)
+                    .service(scope)
+            })
+            .bind(&addr)?;
+
+            let handle = server.run().await;
+            log::warn!("Server finished?");
+            handle
+        })
+    }
+}
+
+impl<In, Out> Server<In, Out>
+where
+    In: std::marker::Send + Clone + 'static,
+    Out: std::marker::Send + Clone + 'static,
+{
     #[must_use]
-    pub fn new(
-        addr: (String, u16),
-        commands: Sender<Command>,
-        responses: Receiver<Response>,
-        apiCommands: Sender<ApiCommand>,
-        apiResponses: Receiver<ApiResponse>,
-    ) -> Self {
+    pub fn new(addr: (String, u16), input: Sender<In>, output: Receiver<Out>) -> Self {
         Self {
             addr,
-            commands,
-            responses,
-            apiCommands,
-            apiResponses,
+            input,
+            output,
         }
     }
 
-    pub async fn run(self) -> std::io::Result<()> {
-        let server = HttpServer::new(move || {
-            let voice = web::scope("/voice")
-                .service(start)
-                .service(stop)
-                .service(set_mode)
-                .app_data(Data::new(AppEvents(
-                    self.commands.clone(),
-                    self.responses.clone(),
-                )));
+    fn voice_scope(&self) -> actix_web::Scope {
+        web::scope("/voice")
+            .service(start)
+            .service(stop)
+            .service(set_mode)
+            // .service(transcribe) // Add transcribe here once implemented
+            .app_data(Data::new(AppEvents(
+                self.input.clone(),
+                self.output.clone(),
+            )))
+    }
 
-            App::new()
-                .wrap(Logger::default())
-                .service(serve_index_page) // Add this line
-                .service(voice)
-        })
-        .bind(&self.addr)?;
-
-        let handle = server.run().await;
-        log::warn!("Server finished?");
-        handle
+    pub async fn run(self) -> io::Result<()> {
+        if let Err(e) = self.start().await {
+            log::error!("Server error: {e}");
+            Err(e.into())
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -200,6 +234,7 @@ pub fn parse_addr_option(s: &str) -> Result<(String, u16), AddressParseError> {
 mod tests {
     use super::*;
     use actix_web::{http::header::ContentType, test, App};
+    // Mocking channel types for tests if needed, or just test endpoints that don't rely on channels
 
     #[actix_web::test]
     async fn test_serve_index_page_success() {
@@ -224,4 +259,8 @@ mod tests {
         let body_bytes = test::read_body(resp).await;
         assert!(String::from_utf8(body_bytes.to_vec()).is_ok());
     }
+
+    // Note: Other tests for start, stop, mode, transcribe endpoints would require
+    // mocking the AppChannel or setting up a test daemon, which is beyond the
+    // scope of this specific refactor based on inline notes.
 }
