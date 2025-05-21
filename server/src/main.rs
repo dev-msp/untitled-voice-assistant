@@ -46,6 +46,26 @@ async fn run_web_server(app: ServeDaemonOpts) -> std::io::Result<bool> {
     let (commands_out, commands_in) = crossbeam::channel::bounded(1);
     let (responses_out, responses_in) = crossbeam::channel::bounded(1);
 
+    // NOTES
+    //
+    // can ApiCommand just map to Command?
+    //
+    // OR rather, are they just named poorly?
+    //
+    // meaning Command is better thought of as a set of low-level operations in the "loosest"
+    // domain within the system
+    //
+    // consequently, APIs are built on this, and so on, as needed and as is practical within the
+    // objective of properly expressing the solution in terms of its concrete domain.
+    //
+    // the following has implications for:
+    // - struct naming
+    // - domain modeling
+    // - command/response mapping
+    //
+    let (api_commands_out, api_commands_in) = crossbeam::channel::bounded(1);
+    let (api_responses_out, api_responses_in) = crossbeam::channel::bounded(1);
+
     let addr = app.serve_addr();
     let handle = spawn_blocking(move || {
         log::info!("Launching with settings: {:?}", app);
@@ -53,7 +73,14 @@ async fn run_web_server(app: ServeDaemonOpts) -> std::io::Result<bool> {
         daemon.run_loop(commands_in, responses_out)
     });
 
-    let server = web::Server::new(addr, commands_out, responses_in);
+    // What does the plan say to do here?
+    let server = web::Server::new(
+        addr,
+        commands_out,
+        responses_in,
+        api_commands_out,
+        api_responses_in,
+    );
     let server_handle = server.run();
 
     tokio::select! {

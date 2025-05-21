@@ -26,7 +26,6 @@ impl<T: Serialize> Responder for ApiResponder<T> {
         HttpResponse::Ok().json(self.content)
     }
 }
-
 type AppChannel = web::Data<AppEvents>;
 
 struct AppEvents(Sender<Command>, Receiver<Response>);
@@ -68,6 +67,48 @@ async fn set_mode(app: AppChannel, mode: web::Json<Mode>) -> impl Responder {
     ApiResponder { content: response }
 }
 
+pub enum ApiCommand {
+    Transcribe(String),
+}
+
+pub enum ApiResponse {
+    Transcription(String),
+}
+
+impl From<ApiResponse> for ApiResponder<String> {
+    fn from(response: ApiResponse) -> Self {
+        match response {
+            ApiResponse::Transcription(s) => Self { content: s },
+        }
+    }
+}
+
+type ApiChannel = web::Data<ApiEvents>;
+
+struct ApiEvents(Sender<ApiCommand>, Receiver<ApiResponse>);
+
+impl ApiEvents {
+    fn transcribe(&self, content: String) -> ApiResponse {
+        self.request(ApiCommand::Transcribe(content))
+    }
+
+    fn request(&self, cmd: ApiCommand) -> ApiResponse {
+        self.0.send(cmd).unwrap();
+        self.1.recv().unwrap()
+    }
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct TranscribeRequest {
+    content: String,
+}
+
+#[post("/transcribe")]
+async fn transcribe(app: ApiChannel, req: web::Json<TranscribeRequest>) -> impl Responder {
+    let response = app.transcribe(req.into_inner().content);
+    ApiResponder::from(response)
+}
+
 #[get("/")]
 async fn serve_index_page() -> impl Responder {
     match fs::read_to_string("../server/templates/index.html") {
@@ -85,6 +126,8 @@ pub struct Server {
     addr: (String, u16),
     commands: Sender<Command>,
     responses: Receiver<Response>,
+    apiCommands: Sender<ApiCommand>,
+    apiResponses: Receiver<ApiResponse>,
 }
 
 impl Server {
@@ -93,11 +136,15 @@ impl Server {
         addr: (String, u16),
         commands: Sender<Command>,
         responses: Receiver<Response>,
+        apiCommands: Sender<ApiCommand>,
+        apiResponses: Receiver<ApiResponse>,
     ) -> Self {
         Self {
             addr,
             commands,
             responses,
+            apiCommands,
+            apiResponses,
         }
     }
 
