@@ -39,19 +39,19 @@ impl State for RecordingState {
             //
             // TODO: I should consider making the event loop not sort of dependent on changes in
             // the state and find some other way to represent that.
-            Plumbing::Reset | Plumbing::Respond(_) | Plumbing::Transcribe { .. } => true, // Transcribe command doesn't change the state
+            Plumbing::Reset | Plumbing::Respond(_) => true,
         }
     }
 }
 
 impl RecordingState {
     #[must_use]
-    pub(crate) fn running(&self) -> bool {
+    pub fn running(&self) -> bool {
         matches!(self.audio, Audio::Started(_))
     }
 
     #[must_use]
-    pub(crate) fn mode(&self) -> Mode {
+    pub fn mode(&self) -> Mode {
         self.mode.clone()
     }
 
@@ -70,7 +70,7 @@ impl RecordingState {
         }
     }
 
-    pub(crate) fn start(&mut self, session: Session) -> bool {
+    fn start(&mut self, session: Session) -> bool {
         match self.audio {
             Audio::Idle | Audio::Stopped(_) => {
                 self.audio = Audio::Started(session);
@@ -80,7 +80,7 @@ impl RecordingState {
         }
     }
 
-    pub(crate) fn stop(&mut self) -> bool {
+    fn stop(&mut self) -> bool {
         match &self.audio {
             Audio::Started(s) => {
                 self.audio = Audio::Stopped(s.clone());

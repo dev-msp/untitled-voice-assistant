@@ -94,14 +94,13 @@ impl Daemon {
 
         let mut commands = CmdStream::new(commands);
 
-        let exit_code = 0_u8;
+        let mut exit_code = 0_u8;
         let mut rec: Option<Recording<_, Vec<f32>>> = None;
         for (ref command, ref new_state_opt) in commands.run_state_machine(&mut self.state) {
-            // Now new_state_opt might be Some(initial_state) for commands that don't change state
-            // but are processed.
-            // We still only want to send a Response if a state transition happened *or* if the
-            // command itself implies a response (like Transcribe, Respond).
-            //
+            // Now new_state_opt might be Some(initial_state) for commands
+            // that don't change state but are processed.
+            // We still only want to send a Response if a state transition happened *or*
+            // if the command itself implies a response (like Transcribe, Respond).
             // Let's adjust the logic to always process the command if run_state_machine yields it.
 
             let Some(new_state) = new_state_opt else {
@@ -178,7 +177,7 @@ impl Daemon {
                             let t = Transcription(t).process();
 
                             if t.is_some() {
-                                log::info!("Transcribed: \"{}\"", t.as_ref().unwrap().content());
+                                log::info!("Transcribed: "{}"", t.as_ref().unwrap().content());
                                 log::info!("Took {:?} to transcribe", now.elapsed(),);
                             } else {
                                 log::info!("No transcription");
@@ -241,7 +240,7 @@ impl Daemon {
                         Ok(t) => {
                             let t = Transcription(t).process();
                             if t.is_some() {
-                                log::info!("Transcribed: \"{}\"", t.as_ref().unwrap().content());
+                                log::info!("Transcribed: "{}"", t.as_ref().unwrap().content());
                                 log::info!("Took {:?} to transcribe", now.elapsed());
                             } else {
                                 log::info!("No transcription");
@@ -249,14 +248,14 @@ impl Daemon {
                             // Send the transcription response back
                             responses.send(Response::Transcription {
                                 content: t.map(|t| t.content().to_string()),
-                                mode: new_state.mode(), // Use current daemon mode
+                                mode: self.state.mode(), // Use current daemon mode
                             })?;
                         }
                         Err(e) => {
                             log::error!("{e}");
                             responses.send(Response::Transcription {
                                 content: None,
-                                mode: new_state.mode(),
+                                mode: self.state.mode(),
                             })?;
                             // Decide if a transcription error should set exit_code
                             // exit_code = 1;

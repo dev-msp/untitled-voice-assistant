@@ -1,4 +1,5 @@
 use crossbeam::channel::Receiver;
+use serde::{Deserialize, Serialize}; // Added for TranscriptionParams
 
 use super::{
     response::Response,
@@ -19,7 +20,7 @@ pub struct TranscriptionParams {
     // Add other relevant params if needed
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum Plumbing {
     #[serde(rename = "start")]
@@ -40,7 +41,7 @@ pub enum Plumbing {
     // Add the command for triggering a transcription directly
     #[serde(rename = "transcribe")]
     Transcribe {
-        audio_data: Vec<f32>,
+        audio_data: Vec<u8>,
         params: TranscriptionParams,
     },
 }
@@ -78,37 +79,37 @@ impl CmdStream {
             log::debug!("Received command: {:?}", cmd);
             log::trace!("Current state: {:?}", state);
             let initial = state.clone();
-            if state.handle(cmd.clone()) {
-                // State transitions only happen for Start, Stop, Mode
-                let transitioned = match &cmd {
-                    Plumbing::Start(session) => state.start(session.clone()),
-                    Plumbing::Stop => state.stop(),
-                    Plumbing::Mode(mode) if !state.running() => state.change_mode(mode.clone()),
-                    _ => false, // Transcribe, Reset, Respond do not change the core State::audio or State::mode
-                };
+<<<<<<< Conflict 1 of 1
+%%%%%%% Changes from base to side #1
+-            if state.next_state(&cmd) {
++            if state.handle(cmd.clone()) {
++++++++ Contents of side #2
+            // State transitions only happen for Start, Stop, Mode
+            let transitioned = match &cmd {
+                Plumbing::Start(session) => state.start(session.clone()),
+                Plumbing::Stop => state.stop(),
+                Plumbing::Mode(mode) if !state.running() => state.change_mode(mode.clone()),
+                _ => false, // Transcribe, Reset, Respond do not change the core State::audio or State::mode
+            };
 
-                if transitioned {
-                    log::trace!("State transitioned to {:?}", state);
-                    (cmd, Some(state.clone()))
-                } else {
-                    log::trace!("No state transition from {:?}", initial);
-                    // Return the original state if no transition occurred,
-                    // but still process commands that don't change state.
-                    // The run_state_machine concept might need refinement if
-                    // commands without state changes should trigger processing.
-                    // For now, let's return Some(initial) for commands that don't
-                    // change state but should be processed (Transcribe, Reset, Respond).
-                    match &cmd {
-                        Plumbing::Transcribe { .. } | Plumbing::Reset | Plumbing::Respond(_) => {
-                            (cmd, Some(initial))
-                        }
-                        _ => (cmd, None), // For commands that *could* change state but didn't (e.g. Start when already Started)
-                    }
-                }
+            if transitioned {
+>>>>>>> Conflict 1 of 1 ends
+                log::trace!("State transitioned to {:?}", state);
+                (cmd, Some(state.clone()))
             } else {
-                // Commands that don't change state are processed here
                 log::trace!("No state transition from {:?}", initial);
-                (cmd, None)
+                // Return the original state if no transition occurred,
+                // but still process commands that don't change state.
+                // The run_state_machine concept might need refinement if
+                // commands without state changes should trigger processing.
+                // For now, let's return Some(initial) for commands that don't
+                // change state but should be processed (Transcribe, Reset, Respond).
+                match &cmd {
+                    Plumbing::Transcribe { .. } | Plumbing::Reset | Plumbing::Respond(_) => {
+                        (cmd, Some(initial))
+                    }
+                    _ => (cmd, None), // For commands that *could* change state but didn't (e.g. Start when already Started)
+                }
             }
         })
     }

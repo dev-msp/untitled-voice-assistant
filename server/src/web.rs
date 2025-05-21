@@ -10,7 +10,7 @@ use actix_web::{
 };
 use bytes::BytesMut; // For collecting multipart data
 use crossbeam::channel::{Receiver, Sender};
-use futures_util::StreamExt;
+use futures_util::stream::StreamExt as _; // For processing multipart stream
 use serde::Serialize;
 use std::{fs, io};
 use tokio::{spawn, task::JoinHandle};
@@ -18,7 +18,7 @@ use voice::{
     app::{
         command::{Plumbing, TranscriptionParams},
         response::Response,
-        state::{Mode, RecordingState},
+        state::Mode,
     }, // Import TranscriptionParams
     audio::Session,
     // OPERATIVE NOTE:
@@ -74,7 +74,7 @@ impl AppEvents<Plumbing, Response> {
     }
 
     // Add the transcribe command sender
-    fn transcribe(&self, audio_data: Vec<f32>, params: TranscriptionParams) -> Response {
+    fn transcribe(&self, audio_data: Vec<u8>, params: TranscriptionParams) -> Response {
         self.request(Plumbing::Transcribe { audio_data, params })
     }
 
@@ -106,6 +106,8 @@ async fn set_mode(app: AppChannel<Plumbing, Response>, mode: web::Json<Mode>) ->
 // suggesting a single command/response channel to the daemon.
 // fn transcribe handler updated to use AppChannel.
 
+<<<<<<< Conflict 1 of 3
++++++++ Contents of side #1
 // #[derive(Debug, serde::Serialize, serde::Deserialize)] // Assuming this struct is still relevant for the request body
 struct TranscribeRequest {
     content: String, // This probably needs to be adjusted for multipart file upload
@@ -115,14 +117,37 @@ struct TranscribeRequest {
     prompt: Option<String>,
 }
 
-// Update transcribe handler to accept multipart and use AppChannel
+%%%%%%% Changes from base to side #2
+-// #[derive(Debug, serde::Serialize, serde::Deserialize)] // Assuming this struct is still relevant for the request body
+-// struct TranscribeRequest {
+-//     content: String, // This probably needs to be adjusted for multipart file upload
+-//     // Add fields for transcription parameters based on audio.md point 6
+-//     // model: Option<voice::whisper::transcription::Model>,
+-//     // sample_rate: Option<u32>,
+-//     // prompt: Option<String>,
+-// }
+-
++// Update transcribe handler to accept multipart and use AppChannel
+>>>>>>> Conflict 1 of 3 ends
 #[post("/transcribe")]
-// Signature changed to use AppChannel
-// The body would need significant changes to handle multipart and call app.transcribe
-async fn transcribe(
-    app: AppChannel<Plumbing, RecordingState>,
-    payload: Multipart,
-) -> impl Responder {
+<<<<<<< Conflict 2 of 3
+%%%%%%% Changes from base to side #1
+ // Signature changed to use AppChannel
+ // The body would need significant changes to handle multipart and call app.transcribe
+-async fn transcribe(_app: AppChannel, _req: web::Json<serde_json::Value>) -> impl Responder {
++async fn transcribe(
++    _app: AppChannel<Plumbing, Response>,
++    _req: web::Json<serde_json::Value>,
++) -> impl Responder {
+     // Using Value as a placeholder for the complex request
+     // let audio_data = ... extract from multipart request ...
+     // let params = ... extract params from multipart request ...
+     // let response = app.transcribe(audio_data, params); // Requires app.transcribe and Plumbing::Transcribe
+     // ApiResponder { content: response } // Assuming Response::Transcription is used
+     log::warn!("transcribe endpoint is a placeholder and needs multipart implementation");
+     HttpResponse::NotImplemented().finish() // Return a placeholder response
++++++++ Contents of side #2
+async fn transcribe(app: AppChannel, mut payload: Multipart) -> impl Responder {
     let mut audio_data: Option<Vec<u8>> = None;
     let mut params: TranscriptionParams = TranscriptionParams {
         model: None,
@@ -132,14 +157,7 @@ async fn transcribe(
 
     // Process multipart fields
     while let Some(mut field) = payload.next().await {
-        let field = match field {
-            Ok(field) => field,
-            Err(e) => {
-                log::error!("Error reading multipart field: {}", e);
-                return HttpResponse::InternalServerError().finish();
-            }
-        };
-        let field_name = field.name().expect("field name").to_string();
+        let field_name = field.name().to_string();
         log::debug!("Received multipart field: {}", field_name);
 
         let mut bytes = BytesMut::new();
@@ -200,6 +218,7 @@ async fn transcribe(
 
     // Respond with the daemon's response
     ApiResponder { content: response }
+>>>>>>> Conflict 2 of 3 ends
 }
 
 #[get("/")]
@@ -257,6 +276,8 @@ where
     pub fn new(addr: (String, u16), input: Sender<In>, output: Receiver<Out>) -> Self {
         Self {
             addr,
+<<<<<<< Conflict 3 of 3
++++++++ Contents of side #1
             input,
             output,
         }
@@ -267,7 +288,7 @@ where
             .service(start)
             .service(stop)
             .service(set_mode)
-            .service(transcribe) // Add transcribe here once implemented
+            // .service(transcribe) // Add transcribe here once implemented
             .app_data(Data::new(AppEvents(
                 self.input.clone(),
                 self.output.clone(),
@@ -281,6 +302,42 @@ where
         } else {
             Ok(())
         }
+%%%%%%% Changes from base to side #2
+             commands,
+             responses,
+             // apiCommands: apiCommands, // removed
+             // apiResponses: apiResponses, // removed
+         }
+     }
+ 
+     pub async fn run(self) -> std::io::Result<()> {
+         let server = HttpServer::new(move || {
+             // Clone the channels for each worker
+             let commands_clone = self.commands.clone();
+             let responses_clone = self.responses.clone();
+ 
+             let voice = web::scope("/voice")
+                 .service(start)
+                 .service(stop)
+                 .service(set_mode)
+-                // .service(transcribe) // Add transcribe here once implemented
++                .service(transcribe) // Add transcribe here once implemented
+                 .app_data(Data::new(AppEvents(
+                     commands_clone,  // Use cloned channels
+                     responses_clone, // Use cloned channels
+                 )));
+ 
+             App::new()
+                 .wrap(Logger::default())
+                 .service(serve_index_page)
+                 .service(voice)
+         })
+         .bind(&self.addr)?;
+ 
+         let handle = server.run().await;
+         log::warn!("Server finished?");
+         handle
+>>>>>>> Conflict 3 of 3 ends
     }
 }
 
