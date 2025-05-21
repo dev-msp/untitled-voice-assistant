@@ -1,3 +1,4 @@
+use actix_multipart::Multipart; // Import for multipart handling
 use actix_web::{
     body::BoxBody,
     get,
@@ -7,17 +8,23 @@ use actix_web::{
     web::{self, Data},
     App, HttpRequest, HttpResponse, HttpServer, Responder,
 };
+use bytes::BytesMut; // For collecting multipart data
 use crossbeam::channel::{Receiver, Sender};
+use futures_util::StreamExt;
 use serde::Serialize;
 use std::{fs, io};
 use tokio::{spawn, task::JoinHandle};
 use voice::{
-    app::{command::Plumbing, response::Response, state::Mode},
+    app::{
+        command::{Plumbing, TranscriptionParams},
+        response::Response,
+        state::{Mode, RecordingState},
+    }, // Import TranscriptionParams
     audio::Session,
     // OPERATIVE NOTE:
     // Assume Plumbing::Transcribe variant and required structs like TranscriptionParams
     // and associated response handling are defined elsewhere (e.g., in voice::app::command)
-    // voice::app::command::TranscriptionParams,
+    // voice::app::command::TranscriptionParams, // Already imported above
 };
 
 struct ApiResponder<T> {
@@ -66,10 +73,10 @@ impl AppEvents<Plumbing, Response> {
         self.request(Plumbing::Mode(mode))
     }
 
-    // Placeholder for transcribe command - requires updating voice::app::command
-    // fn transcribe(&self, audio_data: Vec<u8>, params: TranscriptionParams) -> Response {
-    //     self.request(Plumbing::Transcribe { audio_data, params })
-    // }
+    // Add the transcribe command sender
+    fn transcribe(&self, audio_data: Vec<f32>, params: TranscriptionParams) -> Response {
+        self.request(Plumbing::Transcribe { audio_data, params })
+    }
 
     fn request(&self, cmd: Plumbing) -> Response {
         self.0.send(cmd).unwrap(); // In a real app, handle send errors
@@ -108,20 +115,91 @@ struct TranscribeRequest {
     prompt: Option<String>,
 }
 
+// Update transcribe handler to accept multipart and use AppChannel
 #[post("/transcribe")]
 // Signature changed to use AppChannel
 // The body would need significant changes to handle multipart and call app.transcribe
 async fn transcribe(
-    _app: AppChannel<Plumbing, Response>,
-    _req: web::Json<serde_json::Value>,
+    app: AppChannel<Plumbing, RecordingState>,
+    payload: Multipart,
 ) -> impl Responder {
-    // Using Value as a placeholder for the complex request
-    // let audio_data = ... extract from multipart request ...
-    // let params = ... extract params from multipart request ...
-    // let response = app.transcribe(audio_data, params); // Requires app.transcribe and Plumbing::Transcribe
-    // ApiResponder { content: response } // Assuming Response::Transcription is used
-    log::warn!("transcribe endpoint is a placeholder and needs multipart implementation");
-    HttpResponse::NotImplemented().finish() // Return a placeholder response
+    let mut audio_data: Option<Vec<u8>> = None;
+    let mut params: TranscriptionParams = TranscriptionParams {
+        model: None,
+        sample_rate: None,
+        prompt: None,
+    };
+
+    // Process multipart fields
+    while let Some(mut field) = payload.next().await {
+        let field = match field {
+            Ok(field) => field,
+            Err(e) => {
+                log::error!("Error reading multipart field: {}", e);
+                return HttpResponse::InternalServerError().finish();
+            }
+        };
+        let field_name = field.name().expect("field name").to_string();
+        log::debug!("Received multipart field: {}", field_name);
+
+        let mut bytes = BytesMut::new();
+        while let Some(chunk) = field.next().await {
+            match chunk {
+                Ok(chunk) => bytes.extend_from_slice(&chunk),
+                Err(e) => {
+                    log::error!("Error reading multipart chunk: {}", e);
+                    return HttpResponse::InternalServerError().finish();
+                }
+            }
+        }
+        let data = bytes.freeze();
+
+        match field_name.as_str() {
+            "audio" => {
+                audio_data = Some(data.to_vec());
+            }
+            "model" => {
+                // Assuming model is sent as a string like "small"
+                let model_str = String::from_utf8_lossy(&data);
+                match voice::whisper::transcription::Model::from_str(&model_str) {
+                    Ok(model) => params.model = Some(model),
+                    Err(e) => {
+                        log::warn!("Failed to parse model '{}': {}", model_str, e);
+                        // Optionally return an error response or ignore
+                    }
+                }
+            }
+            "sample_rate" => {
+                // Assuming sample_rate is sent as a number string
+                let sr_str = String::from_utf8_lossy(&data);
+                match sr_str.parse::<u32>() {
+                    Ok(sr) => params.sample_rate = Some(sr),
+                    Err(e) => {
+                        log::warn!("Failed to parse sample_rate '{}': {}", sr_str, e);
+                        // Optionally return an error response or ignore
+                    }
+                }
+            }
+            "prompt" => {
+                // Assuming prompt is sent as text
+                params.prompt = Some(String::from_utf8_lossy(&data).into_owned());
+            }
+            _ => {
+                log::warn!("Ignoring unknown multipart field: {}", field_name);
+            }
+        }
+    }
+
+    let Some(audio) = audio_data else {
+        log::error!("No audio data received in transcribe request");
+        return HttpResponse::BadRequest().body("Missing audio data");
+    };
+
+    // Send the transcribe command to the daemon
+    let response = app.transcribe(audio, params);
+
+    // Respond with the daemon's response
+    ApiResponder { content: response }
 }
 
 #[get("/")]
@@ -189,7 +267,7 @@ where
             .service(start)
             .service(stop)
             .service(set_mode)
-            // .service(transcribe) // Add transcribe here once implemented
+            .service(transcribe) // Add transcribe here once implemented
             .app_data(Data::new(AppEvents(
                 self.input.clone(),
                 self.output.clone(),
@@ -235,9 +313,18 @@ mod tests {
     use super::*;
     use actix_web::{http::header::ContentType, test, App};
     // Mocking channel types for tests if needed, or just test endpoints that don't rely on channels
+    use crossbeam::channel; // Need channels for mocking AppChannel
+
+    // Helper to create a mock AppChannel for testing handlers
+    fn create_mock_app_channel() -> AppChannel {
+        let (cmd_tx, _cmd_rx) = channel::unbounded(); // Mute receiver if not used
+        let (_resp_tx, resp_rx) = channel::unbounded(); // Mute sender if not used
+        Data::new(AppEvents(cmd_tx, resp_rx))
+    }
 
     #[actix_web::test]
     async fn test_serve_index_page_success() {
+        // This test doesn't need the mock AppChannel
         let app = test::init_service(App::new().service(serve_index_page)).await;
 
         let req = test::TestRequest::get().uri("/").to_request();
@@ -263,4 +350,7 @@ mod tests {
     // Note: Other tests for start, stop, mode, transcribe endpoints would require
     // mocking the AppChannel or setting up a test daemon, which is beyond the
     // scope of this specific refactor based on inline notes.
+    // The test_transcribe_placeholder_response above shows how to provide a mock channel.
+    // A full test would involve setting up channels and having mock sender/receiver logic
+    // to simulate the daemon's response.
 }
