@@ -18,15 +18,8 @@
       system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
-        inherit (pkgs.darwin.apple_sdk_11_0.frameworks) Accelerate CoreAudio MetalKit;
-        inherit (pkgs) lib stdenv;
 
         craneLib = crane.mkLib pkgs;
-        darwinBuildInputs = lib.optionals stdenv.isDarwin [
-          Accelerate
-          CoreAudio
-          MetalKit
-        ];
 
         # Common arguments can be set here to avoid repeating them later
         # Note: changes here will rebuild all dependency crates
@@ -39,7 +32,7 @@
           buildInputs = [
             pkgs.iconv
             pkgs.rustPlatform.bindgenHook
-          ] ++ darwinBuildInputs;
+          ];
         };
 
         buildTarget =
